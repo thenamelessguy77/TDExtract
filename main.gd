@@ -16,7 +16,7 @@ const SHOT_PROFILES = [
 ]
 const MAX_HEALTH = 100
 const CRATE_HEALTH = 25
-const LOW_COVER_PENALTY = 25
+const COVER_PENALTY = 25
 const RAID_LOOT_COUNT = 4
 const OBJECTIVE_MIN_DISTANCE = 8
 const RAID_ENEMY_COUNT = 6
@@ -248,8 +248,8 @@ func visible(e: Dictionary) -> bool:
 	return e.hp > 0 and distance(player, e.pos) <= 6 and line_of_sight(player, e.pos)
 
 func cover_at(p: Vector2i, attacker: Vector2i) -> bool:
-	# Only the defender's adjacent low barrier facing the incoming shot matters.
-	# Side/rear shots flank cover; shooting over the attacker's own cover is free.
+	# Only defensive cover affects aim; the shooter can peek over or around it.
+	# Low barriers protect their facing side; full walls protect exposed corners.
 	var delta = attacker - p
 	for direction in DIRS:
 		if tile_at(p + direction) != "=" or delta.x * direction.x + delta.y * direction.y <= 0:
@@ -258,10 +258,10 @@ func cover_at(p: Vector2i, attacker: Vector2i) -> bool:
 			return true
 		if direction.y != 0 and absi(delta.y) >= absi(delta.x):
 			return true
-	return false
+	return corner_cover_at(p, attacker)
 
 func hit_chance(from: Vector2i, to: Vector2i) -> int:
-	return clampi(95 - distance(from, to) * 8 - (LOW_COVER_PENALTY if cover_at(to, from) else 0), 15, 95)
+	return clampi(95 - distance(from, to) * 8 - (COVER_PENALTY if cover_at(to, from) else 0), 15, 95)
 
 func path_to(target: Vector2i) -> Array[Vector2i]:
 	var frontier: Array[Vector2i] = [player]
@@ -530,7 +530,7 @@ func refresh():
 	intel.text = ("COMBAT • %d AP (max 8)" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
 	if aiming:
 		intel.text += " • AIMED"
-	if adjacent_low_cover(player):
+	if adjacent_cover(player):
 		intel.text += "   •   COVER"
 	if selected >= 0 and visible(enemies[selected]):
 		intel.text += "\nTARGET %d HP • HIT %d%%%s" % [enemies[selected].hp, shot_chance(enemies[selected].pos), " • COVER" if cover_at(enemies[selected].pos, player) else ""]
@@ -609,7 +609,7 @@ func draw_map(canvas: Control):
 func draw_cover_edges(canvas: Control, p: Vector2i, color: Color):
 	var center = map_point(p) + Vector2(17, 17)
 	for direction in DIRS:
-		if tile_at(p + direction) == "=":
+		if tile_at(p + direction) == "=" or is_corner_edge(p, direction):
 			var normal = Vector2(direction)
 			var tangent = Vector2(-normal.y, normal.x)
 			canvas.draw_line(center + normal * 15 - tangent * 9, center + normal * 15 + tangent * 9, color, 3)
@@ -703,3 +703,33 @@ func search_body(index: int):
 
 func is_outskirts(p: Vector2i) -> bool:
 	return walkable(p) and mini(mini(p.x, p.y), mini(MAP[0].length() - 1 - p.x, MAP.size() - 1 - p.y)) <= EDGE_BAND
+
+func is_corner_edge(p: Vector2i, direction: Vector2i) -> bool:
+	if not walkable(p) or tile_at(p + direction) != "#":
+		return false
+	var tangent = Vector2i(-direction.y, direction.x)
+	for side in [tangent, -tangent]:
+		if walkable(p + side) and walkable(p + direction + side):
+			return true
+	return false
+
+func adjacent_cover(p: Vector2i) -> bool:
+	if adjacent_low_cover(p):
+		return true
+	for direction in DIRS:
+		if is_corner_edge(p, direction):
+			return true
+	return false
+
+func corner_cover_at(p: Vector2i, attacker: Vector2i) -> bool:
+	if not walkable(attacker) or not line_of_sight(p, attacker):
+		return false
+	var delta = attacker - p
+	for direction in DIRS:
+		if not is_corner_edge(p, direction) or delta.x * direction.x + delta.y * direction.y <= 0:
+			continue
+		var tangent = Vector2i(-direction.y, direction.x)
+		for side in [tangent, -tangent]:
+			if walkable(p + side) and walkable(p + direction + side) and delta.x * side.x + delta.y * side.y > 0:
+				return true
+	return false

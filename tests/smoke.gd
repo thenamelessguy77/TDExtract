@@ -80,6 +80,7 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_full_wall_corners(game), "Corner-cover checks must complete")
 	assert(test_combat_options(game), "Expanded combat tests must complete")
 	assert(test_objective_visibility(game), "Objective visibility checks must complete")
 	assert(test_map_and_bodies(game), "Expanded map checks must complete")
@@ -504,4 +505,35 @@ func test_combat_options(game) -> bool:
 	game.new_raid()
 	assert(game.ap == 4 and not game.aiming and game.shot_mode == 0)
 	print("PASS: four AP, banking/cap, body/head/burst odds and damage, ammo/AP accounting, Aim bonus/persistence through multiple shots/movement/hit cancellation, invalid attacks, raid reset")
+	return true
+
+func test_full_wall_corners(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	var defender = Vector2i(2, 3)
+	var attacker = Vector2i(4, 5)
+	assert(game.is_corner_edge(defender, Vector2i.RIGHT))
+	assert(game.adjacent_cover(defender))
+	assert(game.line_of_sight(defender, attacker) and game.line_of_sight(attacker, defender))
+	assert(game.cover_at(defender, attacker))
+	assert(game.hit_chance(attacker, defender) == 38, "Corner reduces incoming aim by 25 points")
+	assert(game.hit_chance(defender, attacker) == 63, "Peeking around own corner does not penalize outgoing shots")
+	assert(not game.cover_at(defender, Vector2i(1, 5)), "Opposite side flanks corner cover")
+	assert(not game.cover_at(defender, Vector2i(2, 5)), "Shots along exposed side do not receive wall protection")
+	assert(not game.line_of_sight(defender, Vector2i(5, 3)))
+	assert(not game.cover_at(defender, Vector2i(5, 3)), "Corner cover never allows firing through solid walls")
+	assert(not game.adjacent_cover(Vector2i(2, 4)), "Diagonal-only wall proximity does not grant cover")
+	assert(game.cover_at(Vector2i(4, 1), Vector2i(6, 3)), "Corners work on horizontal wall faces too")
+	game.player = attacker
+	game.enemies.append({"pos": defender, "hp": 60, "facing": Vector2i.DOWN})
+	game.selected = 0
+	game.combat = true
+	game.refresh()
+	assert("38%" in game.intel.text and "COVER" in game.intel.text, "Enemy corner cover is reflected in shot preview")
+	game.player = defender
+	game.enemies[0].pos = attacker
+	game.enemies[0].facing = Vector2i.UP
+	game.refresh()
+	assert("63%" in game.intel.text and "COVER" in game.intel.text, "Player gets corner cover and keeps outgoing accuracy")
+	print("PASS: automatic full-wall corner cover, incoming penalty, unpenalized peeking, flanking, blocked walls, cardinal adjacency, horizontal corners, player/enemy preview")
 	return true
