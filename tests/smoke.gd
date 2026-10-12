@@ -78,6 +78,7 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_objective_visibility(game), "Objective visibility checks must complete")
 	assert(test_map_and_bodies(game), "Expanded map checks must complete")
 	assert(test_objective_facing_loot(game), "New raid mechanics must complete")
 	assert(test_health_and_cover(game), "Health and cover checks must all complete")
@@ -233,7 +234,7 @@ func test_objective_facing_loot(game) -> bool:
 		game.new_raid()
 		assert(game.distance(game.player, game.objective) >= 8)
 		assert(game.enemies.size() == 6)
-		assert(game.objective != game.exfil and game.walkable(game.objective))
+		assert(game.objective != game.exfil and game.walkable(game.objective) and game.is_indoors(game.objective))
 		assert(game.loot.size() == 4 and not game.objective_collected)
 		objective_locations[game.objective] = true
 		for e in game.enemies:
@@ -353,4 +354,33 @@ func test_map_and_bodies(game) -> bool:
 	game.center_player()
 	assert(Rect2(game.camera, Vector2(432, 432)).has_point(Vector2(game.player) * game.CELL))
 	print("PASS: 24x24 map, cover gaps including diagonals, single building entrances, accessible interiors, indoor loot bias, body search timing/AP/rewards/patrols, no duplicate or remote search, camera bounds")
+	return true
+
+func test_objective_visibility(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	game.player = Vector2i(13, 5)
+	game.objective = Vector2i(15, 5)
+	game.refresh()
+	assert(not game.objective_visible(), "Building wall must conceal nearby objective")
+	assert(game.objective_button.disabled)
+	var previous_camera = game.camera
+	game.center_objective()
+	assert(game.camera == previous_camera, "Navigation must not leak hidden location")
+	game.player = Vector2i(15, 6)
+	game.refresh()
+	assert(game.objective_visible() and not game.objective_button.disabled)
+	game.player = Vector2i(1, 1)
+	game.objective = Vector2i(10, 1)
+	game.refresh()
+	assert(not game.objective_visible(), "Clear sight outside range is insufficient")
+	game.objective_collected = true
+	game.exfil = Vector2i(22, 22)
+	game.refresh()
+	assert(not game.objective_visible() and not game.objective_button.disabled and game.objective_button.text == "EXFIL")
+	game.center_objective()
+	assert(Rect2(game.camera, Vector2(432, 432)).has_point(Vector2(game.exfil) * game.CELL), "Extraction is locatable after pickup without seeing it")
+	game.new_raid()
+	assert(not game.objective_collected and game.objective_button.disabled)
+	print("PASS: indoor objective spawn, wall/range concealment, guarded navigation, sight reveal, extraction navigation after collection, raid reset")
 	return true

@@ -44,6 +44,7 @@ var reload_button: Button
 var end_button: Button
 var extract_button: Button
 var search_button: Button
+var objective_button: Button
 var map_view: Control
 var camera = Vector2.ZERO
 var pointer_down = false
@@ -109,7 +110,8 @@ func make_ui():
 	make_button("CENTER", Vector2(24, 756), center_player).size = Vector2(136, 40)
 	search_button = make_button("SEARCH", Vector2(172, 756), search_nearby_body)
 	search_button.size = Vector2(136, 40)
-	make_button("OBJECTIVE", Vector2(320, 756), center_objective).size = Vector2(136, 40)
+	objective_button = make_button("OBJECTIVE", Vector2(320, 756), center_objective)
+	objective_button.size = Vector2(136, 40)
 	make_button("NEW RAID", Vector2(320, 20), new_raid).size = Vector2(136, 36)
 
 func tile_at(p: Vector2i) -> String:
@@ -152,10 +154,13 @@ func new_raid():
 	while distance(player, exfil) < 8:
 		floor_tiles.push_front(exfil)
 		exfil = floor_tiles.pop_back()
-	objective = floor_tiles.pop_back()
-	while distance(player, objective) < OBJECTIVE_MIN_DISTANCE:
-		floor_tiles.push_front(objective)
-		objective = floor_tiles.pop_back()
+	var objective_tiles: Array[Vector2i] = []
+	for tile in floor_tiles:
+		if is_indoors(tile) and distance(player, tile) >= OBJECTIVE_MIN_DISTANCE:
+			objective_tiles.append(tile)
+	assert(not objective_tiles.is_empty(), "A distant indoor objective location is required")
+	objective = objective_tiles[rng.randi_range(0, objective_tiles.size() - 1)]
+	floor_tiles.erase(objective)
 	objective_collected = false
 	enemies.clear()
 	for i in range(RAID_ENEMY_COUNT):
@@ -184,7 +189,7 @@ func new_raid():
 	combat = false
 	finished = false
 	selected = -1
-	message = "Find the purple objective, then extract. Search buildings for crates. Drag to explore the map; tap to move."
+	message = "Search buildings for the hidden objective, then extract. Search buildings for crates. Drag to explore the map; tap to move."
 	center_player()
 	refresh()
 
@@ -198,6 +203,9 @@ func line_of_sight(a: Vector2i, b: Vector2i) -> bool:
 		if blocks_sight(Vector2i(roundi(p.x), roundi(p.y))):
 			return false
 	return true
+
+func objective_visible() -> bool:
+	return not objective_collected and distance(player, objective) <= 6 and line_of_sight(player, objective)
 
 func visible(e: Dictionary) -> bool:
 	return e.hp > 0 and distance(player, e.pos) <= 6 and line_of_sight(player, e.pos)
@@ -466,6 +474,8 @@ func refresh():
 	fire_button.disabled = finished or not combat or selected < 0 or ap <= 0 or ammo <= 0
 	reload_button.disabled = not can_reload()
 	end_button.disabled = finished or not combat
+	objective_button.text = "EXFIL" if objective_collected else "OBJECTIVE"
+	objective_button.disabled = not objective_collected and not objective_visible()
 	search_button.disabled = finished or (combat and ap < 1) or nearby_body() < 0
 	search_button.tooltip_text = "Search body: 1 AP" if combat else "Search body: 1 world tick"
 	map_view.queue_redraw()
@@ -485,9 +495,10 @@ func draw_map(canvas: Control):
 				canvas.draw_rect(Rect2(rect.position + Vector2(3, 9), Vector2(28, 16)), Color("85936d"))
 				for stripe in range(4):
 					canvas.draw_line(rect.position + Vector2(5 + stripe * 7, 10), rect.position + Vector2(5 + stripe * 7, 23), Color("c0cca1"), 2)
-	var extract_rect = Rect2(map_point(exfil) + Vector2(3, 3), Vector2(28, 28))
-	canvas.draw_rect(extract_rect, Color("62b58d"), false, 3)
-	if not objective_collected:
+	if objective_collected:
+		var extract_rect = Rect2(map_point(exfil) + Vector2(3, 3), Vector2(28, 28))
+		canvas.draw_rect(extract_rect, Color("62b58d"), false, 3)
+	if objective_visible():
 		var center = map_point(objective) + Vector2(17, 17)
 		canvas.draw_colored_polygon(PackedVector2Array([center + Vector2(0, -12), center + Vector2(12, 0), center + Vector2(0, 12), center + Vector2(-12, 0)]), Color("c89bdf"))
 	for crate in loot:
@@ -572,6 +583,8 @@ func center_player():
 		map_view.queue_redraw()
 
 func center_objective():
+	if not objective_collected and not objective_visible():
+		return
 	camera = Vector2(exfil if objective_collected else objective) * CELL + Vector2(18, 18) - Vector2(216, 216)
 	clamp_camera()
 	map_view.queue_redraw()
