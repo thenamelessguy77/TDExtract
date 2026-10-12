@@ -1,17 +1,17 @@
 # TDExtract
 
 Godot 4.6.3 prototype of a touch-first, grid-based military extraction game.
-Inspired by Mini DAYZ, Shattered Pixel Dungeon, Tarkov's raid stakes, and XCOM's action economy. No borrowed assets. The map is fixed; each raid randomizes your insertion, extraction, three patrols, and seven supply crates.
+Inspired by Mini DAYZ, Shattered Pixel Dungeon, Tarkov's raid stakes, and XCOM's action economy. No borrowed assets. The map is fixed; each raid randomizes your insertion, extraction, three patrols, and four loot crates.
 
 ## Play
 
 Open `project.godot` in Godot 4.6.3 and press F6/F5, or run `godot --path .`.
 
 - Tap/click a reachable tile to travel along its shortest path. Every tile costs one world tick. The world stays still while you decide.
-- Blue is your operator, gold is supply crates, green is extraction. Each crate adds seven reserve rounds, one supply, and immediately restores up to 25 HP (maximum 100), with no extra action. Enemies appear within six tiles and line of sight.
+- Blue is your operator, gold is supply crates, green is extraction. Each crate randomly contains ammo (seven reserve rounds), health (up to 25 HP), or both, plus one supply. Bar icons mean ammo and cross icons mean health. Enemies appear within six tiles and line of sight. They detect you only inside a 90-degree forward cone in their arrow direction; patrol steps turn them toward their movement.
 - Contact interrupts movement immediately. You get two action points per combat turn: moving one tile or firing costs one AP. Tap a hostile to select it and see its hit chance; press Fire to commit the shot. The gun holds seven rounds; you start with 24 reserve rounds. The HUD shows loaded rounds, reserve rounds, and total carried ammo (loaded + reserve). Reloading costs one world tick during exploration, or two AP in combat. A partial reload uses only the rounds you have; a full gun or empty reserve spends no time.
 - End Turn grants living enemies two actions each. Solid gray walls block movement and line of sight. Striped waist-high barriers block movement but allow vision and fire. Standing directly beside a low barrier automatically grants cover against shots coming from that side: incoming hit odds lose 25 percentage points. Side/rear attacks flank cover. Shooting over your own cover never reduces your accuracy; only the target’s cover and range affect the shot. Break contact to resume exploration.
-- Stand on the extraction tile and press Extract to bank your cargo. Death loses raid cargo. Banked supplies persist locally (`user://stash.json`); a new raid resets health and ammunition.
+- First collect the purple objective, which spawns at least eight Manhattan tiles from your insertion on a reachable floor tile. Then stand on the extraction tile and press Extract to bank your cargo. Death loses raid cargo. Banked supplies persist locally (`user://stash.json`); a new raid resets health and ammunition.
 
 This is an initial mechanics prototype, with abstract tactical symbols rather than final pixel art. Equipment, weapon selection, armor, sound, multiple maps, and a full stash/loadout economy are future work. Enemy AI uses simple patrols and greedy pursuit. No real-time simulation or procedural map generation.
 

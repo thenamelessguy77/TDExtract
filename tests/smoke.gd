@@ -10,14 +10,14 @@ func run():
 	game.rng.seed = 77
 	game.new_raid()
 	assert(game.distance(game.player, game.exfil) >= 8)
-	assert(game.enemies.size() == 3 and game.loot.size() == 7)
-	var cells = [game.player, game.exfil]
+	assert(game.enemies.size() == 3 and game.loot.size() == 4)
+	var cells = [game.player, game.exfil, game.objective]
 	for e in game.enemies:
 		assert(game.walkable(e.pos) and not cells.has(e.pos))
 		cells.append(e.pos)
-	for p in game.loot:
-		assert(game.walkable(p) and not cells.has(p))
-		cells.append(p)
+	for crate in game.loot:
+		assert(game.walkable(crate.pos) and not cells.has(crate.pos))
+		cells.append(crate.pos)
 	var before = game.ticks
 	await process_frame
 	await process_frame
@@ -25,7 +25,7 @@ func run():
 	game.enemies.clear()
 	game.player = Vector2i(1, 1)
 	game.loot.clear()
-	game.loot.append(Vector2i(2, 1))
+	game.loot.append({"pos": Vector2i(2, 1), "kind": 2})
 	game.move_to(Vector2i(5, 1))
 	assert(game.ticks == before + 4)
 	assert(game.cargo == 1)
@@ -54,6 +54,7 @@ func run():
 	game.reload_weapon()
 	assert(game.ap == 0 and game.ammo == 7 and game.reserve == 30)
 	game.player = game.exfil
+	game.objective_collected = true
 	var bank = game.stash
 	game.extract()
 	assert(game.finished and game.stash == bank + 1)
@@ -77,6 +78,7 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_objective_facing_loot(game), "New raid mechanics must complete")
 	assert(test_health_and_cover(game), "Health and cover checks must all complete")
 	assert(test_ammo(game), "Ammo checks must all complete")
 	print("PASS: randomized placements, idle freeze, movement ticks, loot, contact interruption, AP, enemy turn, LOS, cover, range, shooting, reloading, extraction, death, 100 raid seeds")
@@ -125,7 +127,7 @@ func test_ammo(game) -> bool:
 	game.enemies.clear()
 	game.combat = false
 	game.loot.clear()
-	game.loot.append(Vector2i(2, 1))
+	game.loot.append({"pos": Vector2i(2, 1), "kind": 2})
 	game.move_to(Vector2i(2, 1))
 	assert(game.reserve == 7 and game.ammo == 1, "Crates add reserve ammo without loading the gun")
 	game.move_to(Vector2i(1, 1))
@@ -153,23 +155,23 @@ func test_health_and_cover(game) -> bool:
 	game.loot.clear()
 	game.player = Vector2i(1, 1)
 	game.hp = 50
-	game.loot.append(Vector2i(2, 1))
+	game.loot.append({"pos": Vector2i(2, 1), "kind": 2})
 	game.move_to(Vector2i(2, 1))
 	assert(game.hp == 75 and game.ticks == 1, "Crates heal without an extra action")
 	game.move_to(Vector2i(1, 1))
 	game.move_to(Vector2i(2, 1))
 	assert(game.hp == 75, "A looted crate cannot heal twice")
 	game.hp = 90
-	game.loot.append(Vector2i(3, 1))
+	game.loot.append({"pos": Vector2i(3, 1), "kind": 2})
 	game.move_to(Vector2i(3, 1))
 	assert(game.hp == 100, "Healing must cap at maximum health")
-	game.loot.append(Vector2i(4, 1))
+	game.loot.append({"pos": Vector2i(4, 1), "kind": 2})
 	game.move_to(Vector2i(4, 1))
 	assert(game.hp == 100 and game.cargo == 3, "Full health still allows looting")
 	game.hp = 70
 	game.combat = true
 	game.ap = 2
-	game.loot.append(Vector2i(5, 1))
+	game.loot.append({"pos": Vector2i(5, 1), "kind": 2})
 	game.move_to(Vector2i(5, 1))
 	assert(game.hp == 95 and game.ap == 1, "Combat crate healing only costs the movement AP")
 	var north = Vector2i(3, 8)
@@ -202,6 +204,7 @@ func test_health_and_cover(game) -> bool:
 	# An enemy firing over its own cover at an uncovered flank keeps 71% aim.
 	game.player = Vector2i(2, 8)
 	game.enemies[0].pos = south
+	game.enemies[0].facing = Vector2i.UP
 	game.hp = 100
 	var rolls = RandomNumberGenerator.new()
 	var firing_seed = -1
@@ -219,4 +222,61 @@ func test_health_and_cover(game) -> bool:
 	assert(not game.walkable(Vector2i(3, 3)) and game.blocks_sight(Vector2i(3, 3)))
 	assert(not game.line_of_sight(Vector2i(2, 3), Vector2i(5, 3)), "Full walls still block visibility")
 	print("PASS: crate healing and health cap, no extra heal action, low-cover movement/LOS, automatic directional cover, flanking, reciprocal shots, own-cover accuracy, cover HUD")
+	return true
+
+func test_objective_facing_loot(game) -> bool:
+	var objective_locations = {}
+	var loot_kinds = {}
+	for seed_value in range(100):
+		game.rng.seed = seed_value
+		game.new_raid()
+		assert(game.distance(game.player, game.objective) >= 8)
+		assert(game.objective != game.exfil and game.walkable(game.objective))
+		assert(game.loot.size() == 4 and not game.objective_collected)
+		objective_locations[game.objective] = true
+		for e in game.enemies:
+			assert(game.DIRS.has(e.facing) and e.pos != game.objective)
+		for crate in game.loot:
+			assert(crate.pos != game.objective and crate.kind >= 0 and crate.kind <= 2)
+			loot_kinds[crate.kind] = true
+		game.enemies.clear()
+		assert(not game.path_to(game.objective).is_empty())
+	assert(objective_locations.size() > 1 and loot_kinds.size() == 3)
+	game.player = game.exfil
+	var bank = game.stash
+	game.extract()
+	assert(not game.finished and game.stash == bank and game.extract_button.disabled)
+	game.player = Vector2i(1, 1)
+	game.objective = Vector2i(2, 1)
+	game.move_to(game.objective)
+	assert(game.objective_collected)
+	for kind in range(3):
+		game.loot.clear()
+		game.loot.append({"pos": Vector2i(3, 1), "kind": kind})
+		game.player = Vector2i(2, 1)
+		game.hp = 50
+		game.reserve = 0
+		game.move_to(Vector2i(3, 1))
+		assert(game.reserve == (0 if kind == 1 else 7))
+		assert(game.hp == (50 if kind == 0 else 75))
+	game.player = Vector2i(2, 1)
+	var guard = {"pos": Vector2i(4, 1), "hp": 60, "facing": Vector2i.RIGHT}
+	assert(game.visible(guard) and not game.enemy_can_see_player(guard), "Player can see a guard facing away without being detected")
+	guard.facing = Vector2i.LEFT
+	assert(game.enemy_can_see_player(guard))
+	guard.facing = Vector2i.UP
+	assert(not game.enemy_can_see_player(guard), "Side and rear are outside the forward cone")
+	game.enemies.clear()
+	game.enemies.append(guard)
+	var previous = guard.pos
+	game.patrol_step(guard)
+	assert(guard.pos != previous and guard.facing == guard.pos - previous)
+	game.enemies.clear()
+	game.player = Vector2i(3, 10)
+	guard = {"pos": Vector2i(3, 8), "hp": 60, "facing": Vector2i.DOWN}
+	assert(game.enemy_can_see_player(guard), "Forward sight passes over low cover")
+	game.player = Vector2i(5, 3)
+	guard = {"pos": Vector2i(2, 3), "hp": 60, "facing": Vector2i.RIGHT}
+	assert(not game.enemy_can_see_player(guard), "Full walls still block facing-based detection")
+	print("PASS: distant randomized objective, locked extraction, objective pickup, four varied crates, directional sight, player visibility, patrol facing, low/full cover detection")
 	return true
