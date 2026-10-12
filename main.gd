@@ -5,6 +5,16 @@ const EDGE_BAND = 2
 const BUILDINGS = [Rect2i(3, 14, 6, 6), Rect2i(14, 3, 7, 6), Rect2i(14, 14, 7, 7)]
 const DOORS = [Vector2i(6, 19), Vector2i(14, 6), Vector2i(17, 14)]
 var MAP: Array[String] = []
+const AP_PER_TURN = 4
+const MAX_AP = 8
+const AIM_BONUS = 30
+const MAP_VIEW_SIZE = Vector2(432, 360)
+const SHOT_PROFILES = [
+	{"name": "NORMAL", "damage": 35, "accuracy": 0, "ap": 1},
+	{"name": "HEAD", "damage": 60, "accuracy": -20, "ap": 1},
+	{"name": "BODY", "damage": 25, "accuracy": 15, "ap": 1},
+	{"name": "BURST", "damage": 35, "accuracy": -15, "ap": 2}
+]
 const MAX_HEALTH = 100
 const CRATE_HEALTH = 25
 const LOW_COVER_PENALTY = 25
@@ -25,7 +35,7 @@ var loot: Array[Dictionary] = []
 var objective = Vector2i.ZERO
 var objective_collected = false
 var hp = MAX_HEALTH
-var ap = 2
+var ap = AP_PER_TURN
 var ammo = MAGAZINE_CAPACITY
 var reserve = 24
 var cargo = 0
@@ -40,6 +50,11 @@ var status: Label
 var ammo_status: Label
 var intel: Label
 var feed: Label
+var shot_mode = 0
+var aiming = false
+var shot_buttons: Array[Button] = []
+var aim_button: Button
+var shot_info: Label
 var fire_button: Button
 var reload_button: Button
 var end_button: Button
@@ -91,7 +106,7 @@ func make_ui():
 	map_view.set_script(load("res://map_view.gd"))
 	map_view.game = self
 	map_view.position = ORIGIN
-	map_view.size = Vector2(432, 432)
+	map_view.size = MAP_VIEW_SIZE
 	map_view.clip_contents = true
 	map_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(map_view)
@@ -100,10 +115,18 @@ func make_ui():
 	status = make_label(Vector2(24, 62), Vector2(432, 24), 17, Color("adc5af"))
 	ammo_status = make_label(Vector2(24, 86), Vector2(432, 24), 16, Color("adc5af"))
 	intel = make_label(Vector2(24, 116), Vector2(432, 42), 14, Color("e0b969"))
-	feed = make_label(Vector2(24, 606), Vector2(432, 82), 16, Color("c8d7cd"))
+	feed = make_label(Vector2(24, 638), Vector2(432, 52), 14, Color("c8d7cd"))
 	feed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	feed.size.y = 66
-	make_label(Vector2(24, 675), Vector2(432, 20), 13, Color("a6b796")).text = "Drag to pan • Scroll wheel • Striped barriers: low cover"
+	feed.size.y = 52
+	for i in range(SHOT_PROFILES.size()):
+		var button = make_button(SHOT_PROFILES[i].name, Vector2(24 + i * 111, 534), choose_shot.bind(i))
+		button.size = Vector2(99, 44)
+		button.toggle_mode = true
+		shot_buttons.append(button)
+	aim_button = make_button("AIM • 1 AP", Vector2(24, 588), aim_weapon)
+	aim_button.size = Vector2(99, 44)
+	aim_button.add_theme_font_size_override("font_size", 14)
+	shot_info = make_label(Vector2(135, 588), Vector2(321, 48), 14, Color("e0b969"))
 	fire_button = make_button("FIRE", Vector2(24, 700), shoot)
 	reload_button = make_button("RELOAD", Vector2(135, 700), reload_weapon)
 	end_button = make_button("END TURN", Vector2(246, 700), enemy_turn)
@@ -191,7 +214,9 @@ func new_raid():
 		var pool = indoor if i < RAID_LOOT_COUNT - 1 else outdoor
 		loot.append({"pos": pool.pop_back(), "kind": rng.randi_range(0, 2)})
 	hp = MAX_HEALTH
-	ap = 2
+	ap = AP_PER_TURN
+	shot_mode = 0
+	aiming = false
 	ammo = MAGAZINE_CAPACITY
 	reserve = 24
 	cargo = 0
@@ -261,7 +286,7 @@ func path_to(target: Vector2i) -> Array[Vector2i]:
 	return path
 
 func _gui_input(event):
-	var bounds = Rect2(ORIGIN, Vector2(432, 432))
+	var bounds = Rect2(ORIGIN, MAP_VIEW_SIZE)
 	if event is InputEventMouseButton:
 		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and bounds.has_point(event.position):
 			var amount = -CELL * 2 if event.button_index == MOUSE_BUTTON_WHEEL_UP else CELL * 2
@@ -311,6 +336,7 @@ func move_to(target: Vector2i):
 			message = "No action points. End your turn."
 			break
 		player = step
+		aiming = false
 		ticks += 1
 		if combat:
 			ap -= 1
@@ -327,7 +353,7 @@ func move_to(target: Vector2i):
 			world_tick()
 			if combat:
 				break
-	if not Rect2(camera, Vector2(432, 432)).has_point(Vector2(player) * CELL + Vector2(18, 18)):
+	if not Rect2(camera, MAP_VIEW_SIZE).has_point(Vector2(player) * CELL + Vector2(18, 18)):
 		center_player()
 	refresh()
 
@@ -377,27 +403,54 @@ func world_tick():
 		combat = true
 		message = "Enemy patrol spotted you. Combat begins."
 
-func shoot():
-	if finished or not combat or ap <= 0 or ammo <= 0:
+func choose_shot(mode: int):
+	if mode < 0 or mode >= SHOT_PROFILES.size():
 		return
-	if selected < 0 or not visible(enemies[selected]):
-		message = "Tap a visible enemy first."
-		refresh()
+	shot_mode = mode
+	refresh()
+
+func shot_chance(target: Vector2i) -> int:
+	return clampi(hit_chance(player, target) + SHOT_PROFILES[shot_mode].accuracy + (AIM_BONUS if aiming else 0), 5, 95)
+
+func aim_weapon():
+	if finished or not combat or ap < 1 or aiming:
+		return
+	ap -= 1
+	aiming = true
+	message = "Aiming: +30 accuracy for your next attack. Movement or a hit cancels it."
+	refresh()
+
+func can_fire() -> bool:
+	return not finished and combat and ap >= SHOT_PROFILES[shot_mode].ap and ammo >= (2 if shot_mode == 3 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected])
+
+func shoot():
+	if not can_fire():
 		return
 	var enemy = enemies[selected]
+	var profile = SHOT_PROFILES[shot_mode]
+	var chance = shot_chance(enemy.pos)
+	var rounds = mini(ammo, rng.randi_range(2, 3)) if shot_mode == 3 else 1
 	spot_player(enemy)
-	ap -= 1
-	ammo -= 1
-	if rng.randi_range(1, 100) <= hit_chance(player, enemy.pos):
-		enemy.hp -= 35
-		message = "Hit for 35 damage." if enemy.hp > 0 else "Hostile neutralized. Move beside the body and Search."
-	else:
-		message = "Shot missed. Reposition to improve your odds."
+	ap -= profile.ap
+	ammo -= rounds
+	aiming = false
+	var hits = 0
+	for round_index in range(rounds):
+		if rng.randi_range(1, 100) <= chance:
+			enemy.hp -= profile.damage
+			hits += 1
+	message = "%s: %d/%d hits, %d damage." % [profile.name, hits, rounds, hits * profile.damage]
 	if enemy.hp <= 0:
 		enemy.loot_kind = rng.randi_range(0, 2)
 		enemy.searched = false
 		selected = -1
+		message += " Hostile down."
 	refresh()
+
+func take_damage(amount: int):
+	if amount > 0:
+		hp = maxi(0, hp - amount)
+		aiming = false
 
 func can_reload() -> bool:
 	return not finished and reserve > 0 and ammo < MAGAZINE_CAPACITY and (not combat or ap >= COMBAT_RELOAD_AP)
@@ -429,7 +482,7 @@ func enemy_turn():
 			if enemy_can_see_player(e):
 				spot_player(e)
 				if rng.randi_range(1, 100) <= hit_chance(e.pos, player):
-					hp -= 12
+					take_damage(12)
 					damage += 12
 			elif e.get("alerted", false):
 				var target = Vector2i(e.get("last_seen", e.pos))
@@ -442,7 +495,7 @@ func enemy_turn():
 				e.pos = best
 			else:
 				patrol_step(e)
-	ap = 2
+	ap = mini(MAX_AP, ap + AP_PER_TURN)
 	ticks += 1
 	message = "Enemy turn: %d damage. Your turn." % damage
 	if hp <= 0:
@@ -476,17 +529,28 @@ func refresh():
 	status.text = "HP %d • LOOT %d • BANK %d • OBJ %s" % [hp, cargo, stash, "OK" if objective_collected else "--"]
 	ammo_status.text = "GUN %d/%d  •  RESERVE %d  •  TOTAL %d" % [ammo, MAGAZINE_CAPACITY, reserve, ammo + reserve]
 	reload_button.tooltip_text = "Reload: 2 AP" if combat else "Reload: 1 world tick"
-	intel.text = ("COMBAT   •   %d / 2 AP" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
+	intel.text = ("COMBAT • %d AP (max 8)" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
+	if aiming:
+		intel.text += " • AIMED"
 	if adjacent_low_cover(player):
 		intel.text += "   •   COVER"
 	if selected >= 0 and visible(enemies[selected]):
-		intel.text += "\nTARGET %d HP • HIT %d%%%s" % [enemies[selected].hp, hit_chance(player, enemies[selected].pos), " • COVER" if cover_at(enemies[selected].pos, player) else ""]
+		intel.text += "\nTARGET %d HP • HIT %d%%%s" % [enemies[selected].hp, shot_chance(enemies[selected].pos), " • COVER" if cover_at(enemies[selected].pos, player) else ""]
 	else:
 		intel.text += "\nPurple: objective • Green: exfil • Arrows: facing"
 	feed.text = message
-	fire_button.disabled = finished or not combat or selected < 0 or ap <= 0 or ammo <= 0
+	var profile = SHOT_PROFILES[shot_mode]
+	shot_info.text = "%s • %d AP • %d damage%s" % [profile.name, profile.ap, profile.damage, "/round" if shot_mode == 3 else ""]
+	shot_info.text += "\nAim +30 • %s • %s" % ["2–3 ammo" if shot_mode == 3 else "1 ammo", "AIM READY" if aiming else "not aimed"]
+	for i in range(shot_buttons.size()):
+		shot_buttons[i].set_pressed_no_signal(i == shot_mode)
+		shot_buttons[i].tooltip_text = "%d damage, %+d accuracy points, %d AP" % [SHOT_PROFILES[i].damage, SHOT_PROFILES[i].accuracy, SHOT_PROFILES[i].ap]
+		shot_buttons[i].disabled = finished
+	aim_button.disabled = finished or not combat or ap < 1 or aiming
+	fire_button.disabled = not can_fire()
 	reload_button.disabled = not can_reload()
 	end_button.disabled = finished or not combat
+	end_button.tooltip_text = "End turn: bank unused AP and gain four, up to eight. Enemies act first."
 	objective_button.text = "EXFIL" if objective_collected else "OBJECTIVE"
 	objective_button.disabled = not objective_collected and not objective_visible()
 	search_button.disabled = finished or (combat and ap < 1) or nearby_body() < 0
@@ -589,10 +653,10 @@ func is_indoors(p: Vector2i) -> bool:
 
 func clamp_camera():
 	camera.x = clampf(camera.x, 0, MAP[0].length() * CELL - 432)
-	camera.y = clampf(camera.y, 0, MAP.size() * CELL - 432)
+	camera.y = clampf(camera.y, 0, MAP.size() * CELL - MAP_VIEW_SIZE.y)
 
 func center_player():
-	camera = Vector2(player) * CELL + Vector2(18, 18) - Vector2(216, 216)
+	camera = Vector2(player) * CELL + Vector2(18, 18) - MAP_VIEW_SIZE / 2
 	clamp_camera()
 	if is_instance_valid(map_view):
 		map_view.queue_redraw()
@@ -600,7 +664,7 @@ func center_player():
 func center_objective():
 	if not objective_collected and not objective_visible():
 		return
-	camera = Vector2(exfil if objective_collected else objective) * CELL + Vector2(18, 18) - Vector2(216, 216)
+	camera = Vector2(exfil if objective_collected else objective) * CELL + Vector2(18, 18) - MAP_VIEW_SIZE / 2
 	clamp_camera()
 	map_view.queue_redraw()
 

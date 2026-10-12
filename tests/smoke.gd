@@ -35,12 +35,14 @@ func run():
 	game.player = Vector2i(1, 1)
 	game.move_to(Vector2i(5, 1))
 	assert(game.combat and game.player == Vector2i(2, 1), "Contact must interrupt travel")
+	game.ap = 2
 	game.move_to(Vector2i(4, 1))
 	assert(game.ap == 0)
 	game.move_to(Vector2i(5, 1))
 	assert(game.player == Vector2i(4, 1))
 	game.enemy_turn()
-	assert(game.ap == 2)
+	assert(game.ap == 4)
+	game.ap = 2
 	assert(game.hit_chance(Vector2i(2, 1), Vector2i(4, 1)) > game.hit_chance(Vector2i(1, 1), Vector2i(7, 1)))
 	assert(not game.line_of_sight(Vector2i(2, 3), Vector2i(5, 3)))
 	assert(not game.cover_at(Vector2i(2, 3), Vector2i(5, 3)), "Full walls block shots rather than apply low cover")
@@ -78,6 +80,7 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_combat_options(game), "Expanded combat tests must complete")
 	assert(test_objective_visibility(game), "Objective visibility checks must complete")
 	assert(test_map_and_bodies(game), "Expanded map checks must complete")
 	assert(test_objective_facing_loot(game), "New raid mechanics must complete")
@@ -101,7 +104,7 @@ func test_ammo(game) -> bool:
 	game.enemies.append({"pos": Vector2i(5, 5), "hp": 60})
 	game.reload_weapon()
 	assert(game.ammo == 5 and game.reserve == 0, "Partial reload must use only available rounds")
-	assert(game.ticks == 1 and game.ap == 2)
+	assert(game.ticks == 1 and game.ap == 4)
 	assert(game.distance(game.enemies[0].pos, Vector2i(5, 5)) == 1, "Reload must advance the enemy patrol once")
 	assert(game.reload_button.disabled)
 	game.reload_weapon()
@@ -116,7 +119,7 @@ func test_ammo(game) -> bool:
 	game.combat = false
 	game.ammo = 0
 	game.reload_weapon()
-	assert(game.combat and game.ap == 2 and game.ticks == 3, "Contact during exploration reload must not charge combat AP")
+	assert(game.combat and game.ap == 4 and game.ticks == 3, "Contact during exploration reload must not charge combat AP")
 	game.ammo = 0
 	game.ap = 1
 	game.refresh()
@@ -351,10 +354,10 @@ func test_map_and_bodies(game) -> bool:
 	assert(game.distance(previous, game.enemies[1].pos) == 1, "A body search advances patrols once")
 	game.camera = Vector2(-999, 9999)
 	game.clamp_camera()
-	assert(game.camera == Vector2(0, 432))
+	assert(game.camera == Vector2(0, 504))
 	game.player = Vector2i(20, 20)
 	game.center_player()
-	assert(Rect2(game.camera, Vector2(432, 432)).has_point(Vector2(game.player) * game.CELL))
+	assert(Rect2(game.camera, game.MAP_VIEW_SIZE).has_point(Vector2(game.player) * game.CELL))
 	print("PASS: 24x24 map, cover gaps including diagonals, single building entrances, accessible interiors, indoor loot bias, body search timing/AP/rewards/patrols, no duplicate or remote search, camera bounds")
 	return true
 
@@ -384,8 +387,120 @@ func test_objective_visibility(game) -> bool:
 	game.refresh()
 	assert(not game.objective_visible() and not game.objective_button.disabled and game.objective_button.text == "EXFIL")
 	game.center_objective()
-	assert(Rect2(game.camera, Vector2(432, 432)).has_point(Vector2(game.exfil) * game.CELL), "Extraction is locatable after pickup without seeing it")
+	assert(Rect2(game.camera, game.MAP_VIEW_SIZE).has_point(Vector2(game.exfil) * game.CELL), "Extraction is locatable after pickup without seeing it")
 	game.new_raid()
 	assert(not game.objective_collected and game.objective_button.disabled)
 	print("PASS: indoor objective spawn, wall/range concealment, guarded navigation, sight reveal, extraction navigation after collection, raid reset")
+	return true
+
+func test_combat_options(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	game.combat = true
+	assert(game.ap == 4)
+	game.enemy_turn()
+	assert(game.ap == 8)
+	game.combat = true
+	game.enemy_turn()
+	assert(game.ap == 8, "Banked AP must cap at eight")
+	game.combat = true
+	game.ap = 1
+	game.enemy_turn()
+	assert(game.ap == 5, "Unused AP must carry over and gain four")
+	game.combat = true
+	game.ap = 4
+	game.enemies.append({"pos": Vector2i(4, 1), "hp": 1000, "facing": Vector2i.RIGHT})
+	game.selected = 0
+	game.choose_shot(0)
+	assert(game.shot_chance(Vector2i(4, 1)) == 71)
+	game.choose_shot(1)
+	assert(game.shot_chance(Vector2i(4, 1)) == 51)
+	game.choose_shot(2)
+	assert(game.shot_chance(Vector2i(4, 1)) == 86)
+	game.choose_shot(3)
+	assert(game.shot_chance(Vector2i(4, 1)) == 56)
+	game.aim_weapon()
+	assert(game.ap == 3 and game.aiming and game.shot_chance(Vector2i(4, 1)) == 86)
+	game.aim_weapon()
+	assert(game.ap == 3, "Aim cannot stack or spend twice")
+	game.enemies.clear()
+	game.enemy_turn()
+	assert(game.aiming and game.ap == 7, "Aim persists across turns when no hit lands")
+	game.combat = true
+	game.move_to(Vector2i(2, 1))
+	assert(not game.aiming and game.ap == 6)
+	game.aim_weapon()
+	game.take_damage(0)
+	assert(game.aiming, "Misses must not cancel Aim")
+	game.take_damage(12)
+	assert(not game.aiming)
+	# Actual enemy-phase misses preserve Aim, while a real hit cancels it.
+	var enemy_rolls = RandomNumberGenerator.new()
+	var miss_seed = -1
+	var hit_seed = -1
+	for candidate in range(1000):
+		enemy_rolls.seed = candidate
+		var first_roll = enemy_rolls.randi_range(1, 100)
+		var second_roll = enemy_rolls.randi_range(1, 100)
+		if first_roll > 87 and second_roll > 87:
+			miss_seed = candidate
+		if first_roll <= 87 and second_roll <= 87:
+			hit_seed = candidate
+		if miss_seed >= 0 and hit_seed >= 0:
+			break
+	assert(miss_seed >= 0 and hit_seed >= 0)
+	game.enemies.clear()
+	game.player = Vector2i(1, 1)
+	game.enemies.append({"pos": Vector2i(2, 1), "hp": 60, "facing": Vector2i.LEFT})
+	game.aiming = true
+	game.combat = true
+	game.hp = 100
+	game.rng.seed = miss_seed
+	game.enemy_turn()
+	assert(game.aiming and game.hp == 100)
+	game.rng.seed = hit_seed
+	game.enemy_turn()
+	assert(not game.aiming and game.hp == 76)
+
+	for mode in range(4):
+		var samples = RandomNumberGenerator.new()
+		game.enemies.clear()
+		game.player = Vector2i(1, 1)
+		game.enemies.append({"pos": Vector2i(4, 1), "hp": 1000, "facing": Vector2i.RIGHT})
+		game.selected = 0
+		game.combat = true
+		game.ap = 8
+		game.ammo = 7
+		game.aiming = true
+		game.choose_shot(mode)
+		game.rng.seed = 42
+		samples.seed = 42
+		var rounds = samples.randi_range(2, 3) if mode == 3 else 1
+		var hits = 0
+		var chance = game.shot_chance(game.enemies[0].pos)
+		for round_index in range(rounds):
+			if samples.randi_range(1, 100) <= chance:
+				hits += 1
+		game.shoot()
+		var damages = [35, 60, 25, 35]
+		assert(game.enemies[0].hp == 1000 - hits * damages[mode])
+		assert(game.ammo == 7 - rounds and game.ap == 8 - (2 if mode == 3 else 1))
+		assert(not game.aiming, "Aim applies to and is consumed by the next attack")
+	game.choose_shot(3)
+	game.ammo = 1
+	game.ap = 8
+	assert(not game.can_fire())
+	game.shoot()
+	assert(game.ammo == 1 and game.ap == 8, "Burst requires at least two loaded rounds")
+	game.ammo = 2
+	game.ap = 1
+	assert(not game.can_fire())
+	game.ap = 2
+	game.shoot()
+	assert(game.ammo == 0 and game.ap == 0)
+	game.new_raid()
+	assert(game.ap == 4 and not game.aiming and game.shot_mode == 0)
+	print("PASS: four AP, banking/cap, normal/head/body/burst odds and damage, ammo/AP accounting, Aim bonus/persistence/consumption/movement/hit cancellation, invalid attacks, raid reset")
 	return true
