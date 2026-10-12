@@ -1,7 +1,7 @@
 # TDExtract
 
 Godot 4.6.3 prototype of a touch-first, grid-based military extraction game.
-Inspired by Mini DAYZ, Shattered Pixel Dungeon, Tarkov's raid stakes, and XCOM's action economy. No borrowed assets. The fixed map is 24×24 with three single-entrance buildings; each raid randomizes your insertion, extraction, three patrols, and four loot crates (three indoors and one outdoors).
+Inspired by Mini DAYZ, Shattered Pixel Dungeon, Tarkov's raid stakes, and XCOM's action economy. No borrowed assets. The fixed map is 24×24 with three single-entrance buildings; each raid randomizes your insertion, extraction, six patrols, and four loot crates (three indoors and one outdoors).
 
 ## Play
 

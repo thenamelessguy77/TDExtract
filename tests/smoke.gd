@@ -10,7 +10,7 @@ func run():
 	game.rng.seed = 77
 	game.new_raid()
 	assert(game.distance(game.player, game.exfil) >= 8)
-	assert(game.enemies.size() == 3 and game.loot.size() == 4)
+	assert(game.enemies.size() == 6 and game.loot.size() == 4)
 	var cells = [game.player, game.exfil, game.objective]
 	for e in game.enemies:
 		assert(game.walkable(e.pos) and not cells.has(e.pos))
@@ -232,6 +232,7 @@ func test_objective_facing_loot(game) -> bool:
 		game.rng.seed = seed_value
 		game.new_raid()
 		assert(game.distance(game.player, game.objective) >= 8)
+		assert(game.enemies.size() == 6)
 		assert(game.objective != game.exfil and game.walkable(game.objective))
 		assert(game.loot.size() == 4 and not game.objective_collected)
 		objective_locations[game.objective] = true
