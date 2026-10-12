@@ -18,7 +18,7 @@ Combat starts with four AP; unused AP carry over with four added after the enemy
 
 ## Touch controls
 
-Portrait-first layout. Tap terrain to move; tap a visible enemy to select it; use a separate Fire button to confirm a shot. Keep mode-adjusted hit odds visible before committing ammunition or AP. Normal/head/body attacks cost one AP with damage/accuracy tradeoffs; burst costs two AP and independently rolls two to three rounds. Aim costs one AP for a 30-point bonus on the next attack, survives turns, and cancels on movement or incoming damage. Buttons for reloading, ending the turn, and extraction remain accessible below the map. A mouse follows exactly the same control path.
+Portrait-first layout. Tap terrain to move; tap a visible enemy to select it; use a separate Fire button to confirm a shot. Keep mode-adjusted hit odds visible before committing ammunition or AP. Body/head attacks cost one AP with damage/accuracy tradeoffs; burst costs two AP and independently rolls two to three rounds. Aim costs one AP for a 30-point bonus on every attack, survives firing and turns, and cancels on movement or incoming damage. Buttons for reloading, ending the turn, and extraction remain accessible below the map. A mouse follows exactly the same control path.
 
 Touch dragging and mouse scrolling pan a clipped map view without advancing simulation. Center and Objective navigation buttons are available. A production map should also support zooming, a movement preview and confirmation, reachable-tile/AP overlays, and a forgiving target selection hit area. Distinct shapes and labels should supplement color markers for accessibility. Final pixel art should use original assets.
 

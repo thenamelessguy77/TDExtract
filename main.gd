@@ -10,9 +10,8 @@ const MAX_AP = 8
 const AIM_BONUS = 30
 const MAP_VIEW_SIZE = Vector2(432, 360)
 const SHOT_PROFILES = [
-	{"name": "NORMAL", "damage": 35, "accuracy": 0, "ap": 1},
+	{"name": "BODY", "damage": 35, "accuracy": 0, "ap": 1},
 	{"name": "HEAD", "damage": 60, "accuracy": -20, "ap": 1},
-	{"name": "BODY", "damage": 25, "accuracy": 15, "ap": 1},
 	{"name": "BURST", "damage": 35, "accuracy": -15, "ap": 2}
 ]
 const MAX_HEALTH = 100
@@ -119,12 +118,12 @@ func make_ui():
 	feed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	feed.size.y = 52
 	for i in range(SHOT_PROFILES.size()):
-		var button = make_button(SHOT_PROFILES[i].name, Vector2(24 + i * 111, 534), choose_shot.bind(i))
-		button.size = Vector2(99, 44)
+		var button = make_button(SHOT_PROFILES[i].name, Vector2(24 + i * 148, 534), choose_shot.bind(i))
+		button.size = Vector2(136, 44)
 		button.toggle_mode = true
 		shot_buttons.append(button)
 	aim_button = make_button("AIM • 1 AP", Vector2(24, 588), aim_weapon)
-	aim_button.size = Vector2(99, 44)
+	aim_button.size = Vector2(136, 44)
 	aim_button.add_theme_font_size_override("font_size", 14)
 	shot_info = make_label(Vector2(135, 588), Vector2(321, 48), 14, Color("e0b969"))
 	fire_button = make_button("FIRE", Vector2(24, 700), shoot)
@@ -417,11 +416,11 @@ func aim_weapon():
 		return
 	ap -= 1
 	aiming = true
-	message = "Aiming: +30 accuracy for your next attack. Movement or a hit cancels it."
+	message = "Aiming: +30 accuracy on every attack until you move or take damage."
 	refresh()
 
 func can_fire() -> bool:
-	return not finished and combat and ap >= SHOT_PROFILES[shot_mode].ap and ammo >= (2 if shot_mode == 3 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected])
+	return not finished and combat and ap >= SHOT_PROFILES[shot_mode].ap and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected])
 
 func shoot():
 	if not can_fire():
@@ -429,11 +428,10 @@ func shoot():
 	var enemy = enemies[selected]
 	var profile = SHOT_PROFILES[shot_mode]
 	var chance = shot_chance(enemy.pos)
-	var rounds = mini(ammo, rng.randi_range(2, 3)) if shot_mode == 3 else 1
+	var rounds = mini(ammo, rng.randi_range(2, 3)) if shot_mode == 2 else 1
 	spot_player(enemy)
 	ap -= profile.ap
 	ammo -= rounds
-	aiming = false
 	var hits = 0
 	for round_index in range(rounds):
 		if rng.randi_range(1, 100) <= chance:
@@ -540,8 +538,8 @@ func refresh():
 		intel.text += "\nPurple: objective • Green: exfil • Arrows: facing"
 	feed.text = message
 	var profile = SHOT_PROFILES[shot_mode]
-	shot_info.text = "%s • %d AP • %d damage%s" % [profile.name, profile.ap, profile.damage, "/round" if shot_mode == 3 else ""]
-	shot_info.text += "\nAim +30 • %s • %s" % ["2–3 ammo" if shot_mode == 3 else "1 ammo", "AIM READY" if aiming else "not aimed"]
+	shot_info.text = "%s • %d AP • %d damage%s" % [profile.name, profile.ap, profile.damage, "/round" if shot_mode == 2 else ""]
+	shot_info.text += "\nAim +30 • %s • %s" % ["2–3 ammo" if shot_mode == 2 else "1 ammo", "AIM READY" if aiming else "not aimed"]
 	for i in range(shot_buttons.size()):
 		shot_buttons[i].set_pressed_no_signal(i == shot_mode)
 		shot_buttons[i].tooltip_text = "%d damage, %+d accuracy points, %d AP" % [SHOT_PROFILES[i].damage, SHOT_PROFILES[i].accuracy, SHOT_PROFILES[i].ap]

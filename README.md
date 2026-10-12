@@ -59,13 +59,12 @@ To host a playable browser build, set **Settings → Pages → Source → GitHub
 
 ## Combat options
 
-Select Normal, Head, Body, or Burst, then tap an enemy and Fire. The displayed hit chance includes range, target cover, shot mode, and Aim.
+Select Body, Head, or Burst, then tap an enemy and Fire. The displayed hit chance includes range, target cover, shot mode, and Aim.
 
 | Attack | Damage per hit | Accuracy adjustment | AP | Loaded ammo |
 | --- | --- | --- | --- | --- |
-| Normal | 35 | unchanged | 1 | 1 |
+| Body | 35 | unchanged | 1 | 1 |
 | Head | 60 | −20 points | 1 | 1 |
-| Body | 25 | +15 points | 1 | 1 |
 | Burst | 35 | −15 points per round | 2 | 2–3 |
 
-Burst independently rolls each round, requires at least two loaded rounds, and fires two if only two remain. Aim costs one AP and adds 30 accuracy points (maximum 95%) to the next attack, including all rounds of a burst. It survives ending the turn, but is consumed by firing or canceled by moving or taking damage. Repeated Aim does not stack. End Turn without acting to bank AP, at the risk of enemy actions. Enemies still get two actions each.
+Burst independently rolls each round, requires at least two loaded rounds, and fires two if only two remain. Aim costs one AP and adds 30 accuracy points (maximum 95%) to every attack, including all burst rounds. It stays active through firing and ending turns, and only moving or taking damage cancels it. Repeated Aim does not stack. End Turn without acting to bank AP, at the risk of enemy actions. Enemies still get two actions each.

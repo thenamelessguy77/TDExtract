@@ -418,8 +418,6 @@ func test_combat_options(game) -> bool:
 	game.choose_shot(1)
 	assert(game.shot_chance(Vector2i(4, 1)) == 51)
 	game.choose_shot(2)
-	assert(game.shot_chance(Vector2i(4, 1)) == 86)
-	game.choose_shot(3)
 	assert(game.shot_chance(Vector2i(4, 1)) == 56)
 	game.aim_weapon()
 	assert(game.ap == 3 and game.aiming and game.shot_chance(Vector2i(4, 1)) == 86)
@@ -464,7 +462,7 @@ func test_combat_options(game) -> bool:
 	game.enemy_turn()
 	assert(not game.aiming and game.hp == 76)
 
-	for mode in range(4):
+	for mode in range(3):
 		var samples = RandomNumberGenerator.new()
 		game.enemies.clear()
 		game.player = Vector2i(1, 1)
@@ -477,18 +475,21 @@ func test_combat_options(game) -> bool:
 		game.choose_shot(mode)
 		game.rng.seed = 42
 		samples.seed = 42
-		var rounds = samples.randi_range(2, 3) if mode == 3 else 1
+		var rounds = samples.randi_range(2, 3) if mode == 2 else 1
 		var hits = 0
 		var chance = game.shot_chance(game.enemies[0].pos)
 		for round_index in range(rounds):
 			if samples.randi_range(1, 100) <= chance:
 				hits += 1
 		game.shoot()
-		var damages = [35, 60, 25, 35]
+		var damages = [35, 60, 35]
 		assert(game.enemies[0].hp == 1000 - hits * damages[mode])
-		assert(game.ammo == 7 - rounds and game.ap == 8 - (2 if mode == 3 else 1))
-		assert(not game.aiming, "Aim applies to and is consumed by the next attack")
-	game.choose_shot(3)
+		assert(game.ammo == 7 - rounds and game.ap == 8 - (2 if mode == 2 else 1))
+		assert(game.aiming, "Firing any attack must preserve Aim")
+		var remaining = game.ammo
+		game.shoot()
+		assert(game.aiming and game.ammo < remaining, "Aim must persist through successive attacks")
+	game.choose_shot(2)
 	game.ammo = 1
 	game.ap = 8
 	assert(not game.can_fire())
@@ -502,5 +503,5 @@ func test_combat_options(game) -> bool:
 	assert(game.ammo == 0 and game.ap == 0)
 	game.new_raid()
 	assert(game.ap == 4 and not game.aiming and game.shot_mode == 0)
-	print("PASS: four AP, banking/cap, normal/head/body/burst odds and damage, ammo/AP accounting, Aim bonus/persistence/consumption/movement/hit cancellation, invalid attacks, raid reset")
+	print("PASS: four AP, banking/cap, body/head/burst odds and damage, ammo/AP accounting, Aim bonus/persistence through multiple shots/movement/hit cancellation, invalid attacks, raid reset")
 	return true

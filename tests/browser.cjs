@@ -54,19 +54,19 @@ const { chromium } = require('playwright');
       if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Mouse wheel advanced the world');
     }
 
-    const normalPreview = await canvas.screenshot();
+    const bodyPreview = await canvas.screenshot();
     async function tapLogical(x,y) {
       if(touch) await page.touchscreen.tap(offsetX+x*scale,offsetY+y*scale);
       else await page.mouse.click(offsetX+x*scale,offsetY+y*scale);
       await page.waitForTimeout(100);
     }
-    await tapLogical(184,556);
+    await tapLogical(240,556);
     const headPreview = await canvas.screenshot();
-    if(normalPreview.equals(headPreview)) throw Error('Head shot selector did not update preview');
-    await tapLogical(406,556);
+    if(bodyPreview.equals(headPreview)) throw Error('Head shot selector did not update preview');
+    await tapLogical(388,556);
     if(headPreview.equals(await canvas.screenshot())) throw Error('Burst selector did not update preview');
     if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Choosing a shot mode spent AP or time');
-    await tapLogical(73,556);
+    await tapLogical(92,556);
     const before = await canvas.screenshot();
     // Clicking a reachable floor region exercises the actual mouse/touch event path.
     if (touch) await page.touchscreen.tap(offsetX+78*scale,offsetY+218*scale);
