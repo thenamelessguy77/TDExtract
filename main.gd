@@ -3,17 +3,20 @@ extends Control
 const MAP = [
 	"############",
 	"#..........#",
+	"#..##....=.#",
+	"#..##..##..#",
+	"#......##..#",
+	"#......==..#",
 	"#..##......#",
 	"#..##..##..#",
 	"#......##..#",
-	"#..........#",
-	"#..##......#",
-	"#..##..##..#",
-	"#......##..#",
-	"#..........#",
+	"#..==......#",
 	"#..........#",
 	"############"
 ]
+const MAX_HEALTH = 100
+const CRATE_HEALTH = 25
+const LOW_COVER_PENALTY = 25
 const RAID_ENEMY_COUNT = 3
 const MAGAZINE_CAPACITY = 7
 const CRATE_AMMO = 7
@@ -26,7 +29,7 @@ var player = Vector2i.ZERO
 var exfil = Vector2i.ZERO
 var enemies: Array[Dictionary] = []
 var loot: Array[Vector2i] = []
-var hp = 100
+var hp = MAX_HEALTH
 var ap = 2
 var ammo = MAGAZINE_CAPACITY
 var reserve = 24
@@ -87,14 +90,30 @@ func make_ui():
 	intel = make_label(Vector2(24, 116), Vector2(432, 42), 14, Color("e0b969"))
 	feed = make_label(Vector2(24, 606), Vector2(432, 82), 16, Color("c8d7cd"))
 	feed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	feed.size.y = 66
+	make_label(Vector2(24, 675), Vector2(432, 20), 13, Color("a6b796")).text = "Striped barriers: low cover • -25 points to incoming aim"
 	fire_button = make_button("FIRE", Vector2(24, 700), shoot)
 	reload_button = make_button("RELOAD", Vector2(135, 700), reload_weapon)
 	end_button = make_button("END TURN", Vector2(246, 700), enemy_turn)
 	extract_button = make_button("EXTRACT", Vector2(357, 700), extract)
 	make_button("NEW RAID", Vector2(320, 20), new_raid).size = Vector2(136, 36)
 
+func tile_at(p: Vector2i) -> String:
+	if p.x < 0 or p.y < 0 or p.y >= MAP.size() or p.x >= MAP[0].length():
+		return "#"
+	return MAP[p.y][p.x]
+
 func walkable(p: Vector2i) -> bool:
-	return p.x >= 0 and p.y >= 0 and p.y < MAP.size() and p.x < MAP[0].length() and MAP[p.y][p.x] != "#"
+	return tile_at(p) == "."
+
+func blocks_sight(p: Vector2i) -> bool:
+	return tile_at(p) == "#"
+
+func adjacent_low_cover(p: Vector2i) -> bool:
+	for direction in DIRS:
+		if tile_at(p + direction) == "=":
+			return true
+	return false
 
 func occupied(p: Vector2i) -> bool:
 	for e in enemies:
@@ -129,7 +148,7 @@ func new_raid():
 	loot.clear()
 	for i in range(7):
 		loot.append(floor_tiles.pop_back())
-	hp = 100
+	hp = MAX_HEALTH
 	ap = 2
 	ammo = MAGAZINE_CAPACITY
 	reserve = 24
@@ -138,7 +157,7 @@ func new_raid():
 	combat = false
 	finished = false
 	selected = -1
-	message = "Tap a tile to travel. Gold crates hold supplies and ammo. Reach the green extraction tile to bank your haul."
+	message = "Tap a tile to travel. Gold crates hold supplies, ammo and health. Reach the green extraction tile to bank your haul."
 	refresh()
 
 func distance(a: Vector2i, b: Vector2i) -> int:
@@ -148,7 +167,7 @@ func line_of_sight(a: Vector2i, b: Vector2i) -> bool:
 	var steps = maxi(absi(b.x - a.x), absi(b.y - a.y))
 	for i in range(1, steps):
 		var p = Vector2(a).lerp(Vector2(b), float(i) / steps)
-		if not walkable(Vector2i(roundi(p.x), roundi(p.y))):
+		if blocks_sight(Vector2i(roundi(p.x), roundi(p.y))):
 			return false
 	return true
 
@@ -156,12 +175,20 @@ func visible(e: Dictionary) -> bool:
 	return e.hp > 0 and distance(player, e.pos) <= 6 and line_of_sight(player, e.pos)
 
 func cover_at(p: Vector2i, attacker: Vector2i) -> bool:
+	# Only the defender's adjacent low barrier facing the incoming shot matters.
+	# Side/rear shots flank cover; shooting over the attacker's own cover is free.
 	var delta = attacker - p
-	var direction = Vector2i(signi(delta.x), 0) if absi(delta.x) >= absi(delta.y) else Vector2i(0, signi(delta.y))
-	return not walkable(p + direction)
+	for direction in DIRS:
+		if tile_at(p + direction) != "=" or delta.x * direction.x + delta.y * direction.y <= 0:
+			continue
+		if direction.x != 0 and absi(delta.x) >= absi(delta.y):
+			return true
+		if direction.y != 0 and absi(delta.y) >= absi(delta.x):
+			return true
+	return false
 
 func hit_chance(from: Vector2i, to: Vector2i) -> int:
-	return clampi(95 - distance(from, to) * 8 - (25 if cover_at(to, from) else 0), 15, 95)
+	return clampi(95 - distance(from, to) * 8 - (LOW_COVER_PENALTY if cover_at(to, from) else 0), 15, 95)
 
 func path_to(target: Vector2i) -> Array[Vector2i]:
 	var frontier: Array[Vector2i] = [player]
@@ -217,7 +244,9 @@ func move_to(target: Vector2i):
 			loot.erase(player)
 			cargo += 1
 			reserve += CRATE_AMMO
-			message = "Recovered supplies and %d reserve rounds. Extract to keep your supplies." % CRATE_AMMO
+			var healed = mini(CRATE_HEALTH, MAX_HEALTH - hp)
+			hp += healed
+			message = "Crate: +%d ammo, +%d HP, +1 supply." % [CRATE_AMMO, healed]
 		if not combat:
 			world_tick()
 			if combat:
@@ -327,8 +356,10 @@ func refresh():
 	ammo_status.text = "GUN %d/%d  •  RESERVE %d  •  TOTAL %d" % [ammo, MAGAZINE_CAPACITY, reserve, ammo + reserve]
 	reload_button.tooltip_text = "Reload: 2 AP" if combat else "Reload: 1 world tick"
 	intel.text = ("COMBAT   •   %d / 2 AP" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
+	if adjacent_low_cover(player):
+		intel.text += "   •   COVER"
 	if selected >= 0 and visible(enemies[selected]):
-		intel.text += "\nTARGET %d HP   •   HIT %d%%" % [enemies[selected].hp, hit_chance(player, enemies[selected].pos)]
+		intel.text += "\nTARGET %d HP • HIT %d%%%s" % [enemies[selected].hp, hit_chance(player, enemies[selected].pos), " • COVER" if cover_at(enemies[selected].pos, player) else ""]
 	else:
 		intel.text += "\nBlue: operator   Gold: loot   Green: exfil"
 	feed.text = message
@@ -344,9 +375,11 @@ func _draw():
 		for x in range(12):
 			var p = Vector2i(x, y)
 			var rect = Rect2(ORIGIN + Vector2(p) * CELL, Vector2.ONE * (CELL - 2))
-			draw_rect(rect, Color("4a5551") if not walkable(p) else Color("23332f"))
-			if walkable(p) and cover_at(p, player):
-				draw_rect(Rect2(rect.position + Vector2(2, 28), Vector2(30, 3)), Color("6c7c63"))
+			draw_rect(rect, Color("4a5551") if blocks_sight(p) else Color("23332f"))
+			if tile_at(p) == "=":
+				draw_rect(Rect2(rect.position + Vector2(3, 9), Vector2(28, 16)), Color("85936d"))
+				for stripe in range(4):
+					draw_line(rect.position + Vector2(5 + stripe * 7, 10), rect.position + Vector2(5 + stripe * 7, 23), Color("c0cca1"), 2)
 	var extract_rect = Rect2(ORIGIN + Vector2(exfil) * CELL + Vector2(3, 3), Vector2(28, 28))
 	draw_rect(extract_rect, Color("62b58d"), false, 3)
 	for p in loot:
@@ -357,8 +390,19 @@ func _draw():
 			continue
 		var center = ORIGIN + Vector2(e.pos) * CELL + Vector2(17, 17)
 		draw_circle(center, 11, Color("c97061"))
+		draw_cover_edges(e.pos, Color("e6be91"))
 		if selected == i:
 			draw_arc(center, 15, 0, TAU, 24, Color("f4df9c"), 2)
 		draw_rect(Rect2(center + Vector2(-12, -16), Vector2(24 * maxf(e.hp, 0) / 60.0, 3)), Color("da8d79"))
 	draw_circle(ORIGIN + Vector2(player) * CELL + Vector2(17, 17), 11, Color("87c6e3"))
 	draw_circle(ORIGIN + Vector2(player) * CELL + Vector2(17, 17), 4, Color("eef4df"))
+
+	draw_cover_edges(player, Color("a0dcd6"))
+
+func draw_cover_edges(p: Vector2i, color: Color):
+	var center = ORIGIN + Vector2(p) * CELL + Vector2(17, 17)
+	for direction in DIRS:
+		if tile_at(p + direction) == "=":
+			var normal = Vector2(direction)
+			var tangent = Vector2(-normal.y, normal.x)
+			draw_line(center + normal * 15 - tangent * 9, center + normal * 15 + tangent * 9, color, 3)

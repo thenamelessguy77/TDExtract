@@ -43,7 +43,7 @@ func run():
 	assert(game.ap == 2)
 	assert(game.hit_chance(Vector2i(2, 1), Vector2i(4, 1)) > game.hit_chance(Vector2i(1, 1), Vector2i(7, 1)))
 	assert(not game.line_of_sight(Vector2i(2, 3), Vector2i(5, 3)))
-	assert(game.cover_at(Vector2i(2, 3), Vector2i(5, 3)))
+	assert(not game.cover_at(Vector2i(2, 3), Vector2i(5, 3)), "Full walls block shots rather than apply low cover")
 	game.selected = 0
 	game.enemies[0].pos = Vector2i(5, 1)
 	game.shoot()
@@ -77,6 +77,7 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_health_and_cover(game), "Health and cover checks must all complete")
 	assert(test_ammo(game), "Ammo checks must all complete")
 	print("PASS: randomized placements, idle freeze, movement ticks, loot, contact interruption, AP, enemy turn, LOS, cover, range, shooting, reloading, extraction, death, 100 raid seeds")
 	game.queue_free()
@@ -144,4 +145,78 @@ func test_ammo(game) -> bool:
 	game.reload_weapon()
 	assert(game.ammo == 0 and game.reserve == 7 and game.ap == 2)
 	print("PASS: ammo HUD, seven-round capacity, partial/full/empty reloads, patrol tick, detection during reload, two-AP combat reload, crate ammo, single pickup, empty gun, finished raid")
+	return true
+
+func test_health_and_cover(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	game.hp = 50
+	game.loot.append(Vector2i(2, 1))
+	game.move_to(Vector2i(2, 1))
+	assert(game.hp == 75 and game.ticks == 1, "Crates heal without an extra action")
+	game.move_to(Vector2i(1, 1))
+	game.move_to(Vector2i(2, 1))
+	assert(game.hp == 75, "A looted crate cannot heal twice")
+	game.hp = 90
+	game.loot.append(Vector2i(3, 1))
+	game.move_to(Vector2i(3, 1))
+	assert(game.hp == 100, "Healing must cap at maximum health")
+	game.loot.append(Vector2i(4, 1))
+	game.move_to(Vector2i(4, 1))
+	assert(game.hp == 100 and game.cargo == 3, "Full health still allows looting")
+	game.hp = 70
+	game.combat = true
+	game.ap = 2
+	game.loot.append(Vector2i(5, 1))
+	game.move_to(Vector2i(5, 1))
+	assert(game.hp == 95 and game.ap == 1, "Combat crate healing only costs the movement AP")
+	var north = Vector2i(3, 8)
+	var south = Vector2i(3, 10)
+	assert(not game.walkable(Vector2i(3, 9)) and not game.blocks_sight(Vector2i(3, 9)))
+	assert(game.line_of_sight(north, south) and game.line_of_sight(south, north), "Low cover must allow reciprocal sight and fire")
+	assert(game.adjacent_low_cover(north) and game.adjacent_low_cover(south))
+	assert(game.cover_at(north, south) and game.cover_at(south, north), "Both sides of a barrier receive cover")
+	assert(not game.cover_at(north, Vector2i(3, 6)), "Rear attacks flank cover")
+	assert(not game.cover_at(north, Vector2i(1, 8)), "Side attacks flank cover")
+	assert(not game.cover_at(Vector2i(2, 8), south), "A distant barrier does not protect the target")
+	assert(game.hit_chance(north, south) == 54 and game.hit_chance(south, north) == 54)
+	assert(game.hit_chance(south, Vector2i(2, 8)) == 71, "Firing over your own cover has no accuracy penalty")
+	assert(game.hit_chance(Vector2i(2, 8), south) == 46, "Only the defender's cover reduces incoming aim")
+	game.player = north
+	var route = game.path_to(south)
+	assert(not route.is_empty() and route.size() > 2, "Movement must route around waist-high barriers")
+	for step in route:
+		assert(game.walkable(step))
+	game.player = south
+	game.enemies.append({"pos": north, "hp": 60})
+	assert(game.visible(game.enemies[0]), "Patrol detection sees over low cover")
+	game.selected = 0
+	game.ap = 2
+	game.ammo = 7
+	game.refresh()
+	assert("COVER" in game.intel.text and "54%" in game.intel.text)
+	game.shoot()
+	assert(game.ammo == 6 and game.ap == 1, "Player can fire across low cover")
+	# An enemy firing over its own cover at an uncovered flank keeps 71% aim.
+	game.player = Vector2i(2, 8)
+	game.enemies[0].pos = south
+	game.hp = 100
+	var rolls = RandomNumberGenerator.new()
+	var firing_seed = -1
+	for candidate in range(1000):
+		rolls.seed = candidate
+		var first = rolls.randi_range(1, 100)
+		var second = rolls.randi_range(1, 100)
+		if first > 46 and first <= 71 and second > 46 and second <= 71:
+			firing_seed = candidate
+			break
+	assert(firing_seed >= 0)
+	game.rng.seed = firing_seed
+	game.enemy_turn()
+	assert(game.hp == 76, "Enemy can fire twice over its own cover without an aim penalty")
+	assert(not game.walkable(Vector2i(3, 3)) and game.blocks_sight(Vector2i(3, 3)))
+	assert(not game.line_of_sight(Vector2i(2, 3), Vector2i(5, 3)), "Full walls still block visibility")
+	print("PASS: crate healing and health cap, no extra heal action, low-cover movement/LOS, automatic directional cover, flanking, reciprocal shots, own-cover accuracy, cover HUD")
 	return true
