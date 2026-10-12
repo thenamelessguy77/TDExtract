@@ -78,6 +78,7 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_map_and_bodies(game), "Expanded map checks must complete")
 	assert(test_objective_facing_loot(game), "New raid mechanics must complete")
 	assert(test_health_and_cover(game), "Health and cover checks must all complete")
 	assert(test_ammo(game), "Ammo checks must all complete")
@@ -279,4 +280,76 @@ func test_objective_facing_loot(game) -> bool:
 	guard = {"pos": Vector2i(2, 3), "hp": 60, "facing": Vector2i.RIGHT}
 	assert(not game.enemy_can_see_player(guard), "Full walls still block facing-based detection")
 	print("PASS: distant randomized objective, locked extraction, objective pickup, four varied crates, directional sight, player visibility, patrol facing, low/full cover detection")
+	return true
+
+func test_map_and_bodies(game) -> bool:
+	game.new_raid()
+	assert(game.MAP.size() == 24 and game.MAP[0].length() == 24)
+	for y in range(24):
+		for x in range(24):
+			var p = Vector2i(x, y)
+			if game.tile_at(p) == "=":
+				for dy in range(-1, 2):
+					for dx in range(-1, 2):
+						assert(not game.blocks_sight(p + Vector2i(dx, dy)))
+	game.enemies.clear()
+	for i in range(game.BUILDINGS.size()):
+		var room = game.BUILDINGS[i]
+		var openings = 0
+		for y in range(room.position.y, room.end.y):
+			for x in range(room.position.x, room.end.x):
+				if x == room.position.x or x == room.end.x - 1 or y == room.position.y or y == room.end.y - 1:
+					if game.walkable(Vector2i(x, y)):
+						openings += 1
+		assert(openings == 1 and game.walkable(game.DOORS[i]))
+		game.player = Vector2i(1, 1)
+		assert(not game.path_to(room.position + Vector2i(1, 1)).is_empty(), "Every building interior must be accessible through its entrance")
+	for seed_value in range(20):
+		game.rng.seed = seed_value
+		game.new_raid()
+		var indoor_count = 0
+		for crate in game.loot:
+			indoor_count += int(game.is_indoors(crate.pos))
+		assert(indoor_count == 3)
+	game.enemies.clear()
+	game.player = Vector2i(1, 1)
+	game.enemies.append({"pos": Vector2i(2, 1), "hp": 0, "loot_kind": 2, "searched": false})
+	game.hp = 50
+	game.reserve = 0
+	game.ticks = 0
+	game.cargo = 0
+	game.combat = false
+	game.search_body(0)
+	assert(game.enemies[0].searched and game.hp == 75 and game.reserve == 7 and game.cargo == 1 and game.ticks == 1)
+	game.search_body(0)
+	assert(game.ticks == 1 and game.cargo == 1, "Bodies can only be searched once")
+	game.enemies[0].searched = false
+	game.player = Vector2i(5, 1)
+	game.search_body(0)
+	assert(not game.enemies[0].searched and game.ticks == 1, "Must be on or adjacent to a body")
+	game.player = Vector2i(1, 1)
+	game.enemies[0].hp = 60
+	game.search_body(0)
+	assert(game.ticks == 1, "Living enemies cannot be searched")
+	game.enemies[0].hp = 0
+	game.combat = true
+	game.ap = 0
+	game.search_body(0)
+	assert(game.ticks == 1 and not game.enemies[0].searched)
+	game.ap = 2
+	game.search_body(0)
+	assert(game.ticks == 2 and game.ap == 1 and game.enemies[0].searched)
+	game.enemies[0].searched = false
+	game.combat = false
+	game.enemies.append({"pos": Vector2i(5, 5), "hp": 60, "facing": Vector2i.DOWN})
+	var previous = game.enemies[1].pos
+	game.search_body(0)
+	assert(game.distance(previous, game.enemies[1].pos) == 1, "A body search advances patrols once")
+	game.camera = Vector2(-999, 9999)
+	game.clamp_camera()
+	assert(game.camera == Vector2(0, 432))
+	game.player = Vector2i(20, 20)
+	game.center_player()
+	assert(Rect2(game.camera, Vector2(432, 432)).has_point(Vector2(game.player) * game.CELL))
+	print("PASS: 24x24 map, cover gaps including diagonals, single building entrances, accessible interiors, indoor loot bias, body search timing/AP/rewards/patrols, no duplicate or remote search, camera bounds")
 	return true

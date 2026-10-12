@@ -16,6 +16,44 @@ const { chromium } = require('playwright');
     const scale = Math.min(viewport.width/480, viewport.height/800);
     const offsetX = (viewport.width - 480*scale)/2;
     const offsetY = (viewport.height - 800*scale)/2;
+    const hudClip = {x:offsetX,y:offsetY,width:480*scale,height:160*scale};
+    const hudBefore = await page.screenshot({clip:hudClip});
+    const mapBefore = await canvas.screenshot();
+    const client = touch ? await context.newCDPSession(page) : null;
+    async function drag(dx,dy) {
+      const start = {x:offsetX+240*scale,y:offsetY+380*scale};
+      const end = {x:start.x+dx*scale,y:start.y+dy*scale};
+      if(touch) {
+        await client.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[start]});
+        await client.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[end]});
+        await client.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      } else {
+        await page.mouse.move(start.x,start.y);
+        await page.mouse.down();
+        await page.mouse.move(end.x,end.y,{steps:5});
+        await page.mouse.up();
+      }
+      await page.waitForTimeout(150);
+    }
+    await drag(70,70);
+    const firstPan = await canvas.screenshot();
+    await drag(-140,-140);
+    const secondPan = await canvas.screenshot();
+    if(mapBefore.equals(firstPan) && firstPan.equals(secondPan)) throw Error('Map dragging failed');
+    if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Panning changed HP/AP/ticks or moved the player');
+    if(!touch) {
+      await page.mouse.move(offsetX+240*scale,offsetY+380*scale);
+      const wheelBefore = await canvas.screenshot();
+      await page.mouse.wheel(0,144);
+      await page.waitForTimeout(150);
+      const wheelDown = await canvas.screenshot();
+      await page.mouse.wheel(0,-288);
+      await page.waitForTimeout(150);
+      const wheelUp = await canvas.screenshot();
+      if(wheelBefore.equals(wheelDown) && wheelDown.equals(wheelUp)) throw Error('Mouse wheel scrolling failed');
+      if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Mouse wheel advanced the world');
+    }
+
     const before = await canvas.screenshot();
     // Clicking a reachable floor region exercises the actual mouse/touch event path.
     if (touch) await page.touchscreen.tap(offsetX+78*scale,offsetY+218*scale);
@@ -33,7 +71,7 @@ const { chromium } = require('playwright');
     if (idle.equals(await canvas.screenshot())) throw Error('New Raid input failed');
     if (failures.length) throw Error(failures.join('\n'));
     await page.screenshot({path:`build/web/${touch ? 'touch' : 'mouse'}-smoke.png`});
-    console.log(`PASS: WebAssembly startup, ${touch ? 'touch' : 'mouse'} grid input, idle freeze, new raid, no browser/script errors`);
+    console.log(`PASS: WebAssembly startup, ${touch ? 'touch' : 'mouse'} drag panning without advancing time, grid input, idle freeze, new raid, no browser/script errors`);
     await context.close();
   }
   await browser.close();

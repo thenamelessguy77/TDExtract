@@ -1,19 +1,9 @@
 extends Control
 
-const MAP = [
-	"############",
-	"#..........#",
-	"#..##....=.#",
-	"#..##..##..#",
-	"#......##..#",
-	"#......==..#",
-	"#..##......#",
-	"#..##..##..#",
-	"#......##..#",
-	"#..==......#",
-	"#..........#",
-	"############"
-]
+const MAP_SIZE = 24
+const BUILDINGS = [Rect2i(3, 14, 6, 6), Rect2i(14, 3, 7, 6), Rect2i(14, 14, 7, 7)]
+const DOORS = [Vector2i(6, 19), Vector2i(14, 6), Vector2i(17, 14)]
+var MAP: Array[String] = []
 const MAX_HEALTH = 100
 const CRATE_HEALTH = 25
 const LOW_COVER_PENALTY = 25
@@ -53,8 +43,16 @@ var fire_button: Button
 var reload_button: Button
 var end_button: Button
 var extract_button: Button
+var search_button: Button
+var map_view: Control
+var camera = Vector2.ZERO
+var pointer_down = false
+var pointer_start = Vector2.ZERO
+var pointer_last = Vector2.ZERO
+var pointer_dragged = false
 
 func _ready():
+	build_map()
 	rng.randomize()
 	stash = int(load_stash())
 	make_ui()
@@ -87,6 +85,14 @@ func make_button(text_value: String, pos: Vector2, callback: Callable) -> Button
 	return button
 
 func make_ui():
+	map_view = Control.new()
+	map_view.set_script(load("res://map_view.gd"))
+	map_view.game = self
+	map_view.position = ORIGIN
+	map_view.size = Vector2(432, 432)
+	map_view.clip_contents = true
+	map_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(map_view)
 	title = make_label(Vector2(24, 20), Vector2(280, 32), 22, Color("e7efcf"))
 	title.text = "TD / EXTRACTION"
 	status = make_label(Vector2(24, 62), Vector2(432, 24), 17, Color("adc5af"))
@@ -95,11 +101,15 @@ func make_ui():
 	feed = make_label(Vector2(24, 606), Vector2(432, 82), 16, Color("c8d7cd"))
 	feed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	feed.size.y = 66
-	make_label(Vector2(24, 675), Vector2(432, 20), 13, Color("a6b796")).text = "Striped barriers: low cover • -25 points to incoming aim"
+	make_label(Vector2(24, 675), Vector2(432, 20), 13, Color("a6b796")).text = "Drag to pan • Scroll wheel • Striped barriers: low cover"
 	fire_button = make_button("FIRE", Vector2(24, 700), shoot)
 	reload_button = make_button("RELOAD", Vector2(135, 700), reload_weapon)
 	end_button = make_button("END TURN", Vector2(246, 700), enemy_turn)
 	extract_button = make_button("EXTRACT", Vector2(357, 700), extract)
+	make_button("CENTER", Vector2(24, 756), center_player).size = Vector2(136, 40)
+	search_button = make_button("SEARCH", Vector2(172, 756), search_nearby_body)
+	search_button.size = Vector2(136, 40)
+	make_button("OBJECTIVE", Vector2(320, 756), center_objective).size = Vector2(136, 40)
 	make_button("NEW RAID", Vector2(320, 20), new_raid).size = Vector2(136, 36)
 
 func tile_at(p: Vector2i) -> String:
@@ -127,8 +137,8 @@ func occupied(p: Vector2i) -> bool:
 
 func new_raid():
 	var floor_tiles: Array[Vector2i] = []
-	for y in range(12):
-		for x in range(12):
+	for y in range(MAP.size()):
+		for x in range(MAP[0].length()):
 			if walkable(Vector2i(x, y)):
 				floor_tiles.append(Vector2i(x, y))
 	# Local RNG: reproducible under a fixed seed in tests.
@@ -155,8 +165,16 @@ func new_raid():
 			pos = floor_tiles.pop_back()
 		enemies.append({"pos": pos, "hp": 60, "facing": DIRS[rng.randi_range(0, 3)], "alerted": false, "last_seen": pos})
 	loot.clear()
+	var indoor: Array[Vector2i] = []
+	var outdoor: Array[Vector2i] = []
+	for tile in floor_tiles:
+		if is_indoors(tile):
+			indoor.append(tile)
+		else:
+			outdoor.append(tile)
 	for i in range(RAID_LOOT_COUNT):
-		loot.append({"pos": floor_tiles.pop_back(), "kind": rng.randi_range(0, 2)})
+		var pool = indoor if i < RAID_LOOT_COUNT - 1 else outdoor
+		loot.append({"pos": pool.pop_back(), "kind": rng.randi_range(0, 2)})
 	hp = MAX_HEALTH
 	ap = 2
 	ammo = MAGAZINE_CAPACITY
@@ -166,7 +184,8 @@ func new_raid():
 	combat = false
 	finished = false
 	selected = -1
-	message = "Collect the purple objective before extracting. Crates contain ammo, health, or both. Arrows show enemy facing."
+	message = "Find the purple objective, then extract. Search buildings for crates. Drag to explore the map; tap to move."
+	center_player()
 	refresh()
 
 func distance(a: Vector2i, b: Vector2i) -> int:
@@ -221,21 +240,46 @@ func path_to(target: Vector2i) -> Array[Vector2i]:
 	return path
 
 func _gui_input(event):
-	if finished:
-		return
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		var local = event.position - ORIGIN
-		if local.x < 0 or local.y < 0 or local.x >= 432 or local.y >= 432:
+	var bounds = Rect2(ORIGIN, Vector2(432, 432))
+	if event is InputEventMouseButton:
+		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and bounds.has_point(event.position):
+			var amount = -CELL * 2 if event.button_index == MOUSE_BUTTON_WHEEL_UP else CELL * 2
+			camera += Vector2(amount, 0) if event.shift_pressed else Vector2(0, amount)
+			clamp_camera()
+			map_view.queue_redraw()
+		elif event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed and bounds.has_point(event.position):
+				pointer_down = true
+				pointer_start = event.position
+				pointer_last = event.position
+				pointer_dragged = false
+			elif not event.pressed and pointer_down:
+				pointer_down = false
+				if not pointer_dragged and bounds.has_point(event.position) and not finished:
+					select_tile(Vector2i((event.position - ORIGIN + camera) / CELL))
+	elif event is InputEventMouseMotion and pointer_down:
+		if event.position.distance_to(pointer_start) > 8:
+			pointer_dragged = true
+		if pointer_dragged:
+			camera -= event.position - pointer_last
+			clamp_camera()
+			map_view.queue_redraw()
+		pointer_last = event.position
+
+func select_tile(target: Vector2i):
+	for i in range(enemies.size()):
+		if enemies[i].pos != target:
+			continue
+		if enemies[i].hp <= 0 and distance(player, target) <= 1:
+			search_body(i)
 			return
-		var target = Vector2i(floori(local.x / CELL), floori(local.y / CELL))
-		for i in range(enemies.size()):
-			if enemies[i].pos == target and visible(enemies[i]):
-				selected = i
-				combat = true
-				message = "Target acquired. Fire to engage, or reposition behind cover."
-				refresh()
-				return
-		move_to(target)
+		if visible(enemies[i]):
+			selected = i
+			combat = true
+			message = "Target acquired. Fire to engage, or reposition behind cover."
+			refresh()
+			return
+	move_to(target)
 
 func move_to(target: Vector2i):
 	var path = path_to(target)
@@ -256,17 +300,14 @@ func move_to(target: Vector2i):
 			if loot[i].pos == player:
 				var kind = loot[i].kind
 				loot.remove_at(i)
-				cargo += 1
-				var rounds = CRATE_AMMO if kind != 1 else 0
-				var healed = mini(CRATE_HEALTH, MAX_HEALTH - hp) if kind != 0 else 0
-				reserve += rounds
-				hp += healed
-				message = "Crate: +%d ammo, +%d HP, +1 supply." % [rounds, healed]
+				apply_loot(kind, "Crate")
 				break
 		if not combat:
 			world_tick()
 			if combat:
 				break
+	if not Rect2(camera, Vector2(432, 432)).has_point(Vector2(player) * CELL + Vector2(18, 18)):
+		center_player()
 	refresh()
 
 func facing_toward(delta: Vector2i) -> Vector2i:
@@ -328,10 +369,12 @@ func shoot():
 	ammo -= 1
 	if rng.randi_range(1, 100) <= hit_chance(player, enemy.pos):
 		enemy.hp -= 35
-		message = "Hit for 35 damage." if enemy.hp > 0 else "Hostile neutralized."
+		message = "Hit for 35 damage." if enemy.hp > 0 else "Hostile neutralized. Move beside the body and Search."
 	else:
 		message = "Shot missed. Reposition to improve your odds."
 	if enemy.hp <= 0:
+		enemy.loot_kind = rng.randi_range(0, 2)
+		enemy.searched = false
 		selected = -1
 	refresh()
 
@@ -423,50 +466,147 @@ func refresh():
 	fire_button.disabled = finished or not combat or selected < 0 or ap <= 0 or ammo <= 0
 	reload_button.disabled = not can_reload()
 	end_button.disabled = finished or not combat
+	search_button.disabled = finished or (combat and ap < 1) or nearby_body() < 0
+	search_button.tooltip_text = "Search body: 1 AP" if combat else "Search body: 1 world tick"
+	map_view.queue_redraw()
 	extract_button.disabled = finished or player != exfil or not objective_collected
 	queue_redraw()
 
 func _draw():
 	draw_rect(Rect2(Vector2.ZERO, size), Color("101b1b"))
-	for y in range(12):
-		for x in range(12):
+
+func draw_map(canvas: Control):
+	for y in range(MAP.size()):
+		for x in range(MAP[0].length()):
 			var p = Vector2i(x, y)
-			var rect = Rect2(ORIGIN + Vector2(p) * CELL, Vector2.ONE * (CELL - 2))
-			draw_rect(rect, Color("4a5551") if blocks_sight(p) else Color("23332f"))
+			var rect = Rect2(map_point(p), Vector2.ONE * (CELL - 2))
+			canvas.draw_rect(rect, Color("4a5551") if blocks_sight(p) else (Color("354039") if is_indoors(p) else Color("23332f")))
 			if tile_at(p) == "=":
-				draw_rect(Rect2(rect.position + Vector2(3, 9), Vector2(28, 16)), Color("85936d"))
+				canvas.draw_rect(Rect2(rect.position + Vector2(3, 9), Vector2(28, 16)), Color("85936d"))
 				for stripe in range(4):
-					draw_line(rect.position + Vector2(5 + stripe * 7, 10), rect.position + Vector2(5 + stripe * 7, 23), Color("c0cca1"), 2)
-	var extract_rect = Rect2(ORIGIN + Vector2(exfil) * CELL + Vector2(3, 3), Vector2(28, 28))
-	draw_rect(extract_rect, Color("62b58d"), false, 3)
+					canvas.draw_line(rect.position + Vector2(5 + stripe * 7, 10), rect.position + Vector2(5 + stripe * 7, 23), Color("c0cca1"), 2)
+	var extract_rect = Rect2(map_point(exfil) + Vector2(3, 3), Vector2(28, 28))
+	canvas.draw_rect(extract_rect, Color("62b58d"), false, 3)
 	if not objective_collected:
-		var center = ORIGIN + Vector2(objective) * CELL + Vector2(17, 17)
-		draw_colored_polygon(PackedVector2Array([center + Vector2(0, -12), center + Vector2(12, 0), center + Vector2(0, 12), center + Vector2(-12, 0)]), Color("c89bdf"))
+		var center = map_point(objective) + Vector2(17, 17)
+		canvas.draw_colored_polygon(PackedVector2Array([center + Vector2(0, -12), center + Vector2(12, 0), center + Vector2(0, 12), center + Vector2(-12, 0)]), Color("c89bdf"))
 	for crate in loot:
-		var center = ORIGIN + Vector2(crate.pos) * CELL + Vector2(17, 17)
-		draw_rect(Rect2(center - Vector2(8, 8), Vector2(16, 16)), Color("d6ad58"))
+		var center = map_point(crate.pos) + Vector2(17, 17)
+		canvas.draw_rect(Rect2(center - Vector2(8, 8), Vector2(16, 16)), Color("d6ad58"))
 	for i in range(enemies.size()):
 		var e = enemies[i]
+		if e.hp <= 0:
+			if distance(player, e.pos) <= 6 and line_of_sight(player, e.pos):
+				var body_center = map_point(e.pos) + Vector2(17, 17)
+				var body_color = Color("778078") if e.get("searched", false) else Color("e0c090")
+				canvas.draw_line(body_center - Vector2(8, 5), body_center + Vector2(8, 5), body_color, 4)
+				canvas.draw_line(body_center + Vector2(-8, 5), body_center + Vector2(8, -5), body_color, 4)
+			continue
 		if not visible(e):
 			continue
-		var center = ORIGIN + Vector2(e.pos) * CELL + Vector2(17, 17)
-		draw_circle(center, 11, Color("c97061"))
+		var center = map_point(e.pos) + Vector2(17, 17)
+		canvas.draw_circle(center, 11, Color("c97061"))
 		var forward = Vector2(e.get("facing", Vector2i.LEFT))
 		var side = Vector2(-forward.y, forward.x)
-		draw_colored_polygon(PackedVector2Array([center + forward * 14, center + forward * 4 + side * 5, center + forward * 4 - side * 5]), Color("fff0c0"))
-		draw_cover_edges(e.pos, Color("e6be91"))
+		canvas.draw_colored_polygon(PackedVector2Array([center + forward * 14, center + forward * 4 + side * 5, center + forward * 4 - side * 5]), Color("fff0c0"))
+		draw_cover_edges(canvas, e.pos, Color("e6be91"))
 		if selected == i:
-			draw_arc(center, 15, 0, TAU, 24, Color("f4df9c"), 2)
-		draw_rect(Rect2(center + Vector2(-12, -16), Vector2(24 * maxf(e.hp, 0) / 60.0, 3)), Color("da8d79"))
-	draw_circle(ORIGIN + Vector2(player) * CELL + Vector2(17, 17), 11, Color("87c6e3"))
-	draw_circle(ORIGIN + Vector2(player) * CELL + Vector2(17, 17), 4, Color("eef4df"))
+			canvas.draw_arc(center, 15, 0, TAU, 24, Color("f4df9c"), 2)
+		canvas.draw_rect(Rect2(center + Vector2(-12, -16), Vector2(24 * maxf(e.hp, 0) / 60.0, 3)), Color("da8d79"))
+	canvas.draw_circle(map_point(player) + Vector2(17, 17), 11, Color("87c6e3"))
+	canvas.draw_circle(map_point(player) + Vector2(17, 17), 4, Color("eef4df"))
 
-	draw_cover_edges(player, Color("a0dcd6"))
+	draw_cover_edges(canvas, player, Color("a0dcd6"))
 
-func draw_cover_edges(p: Vector2i, color: Color):
-	var center = ORIGIN + Vector2(p) * CELL + Vector2(17, 17)
+func draw_cover_edges(canvas: Control, p: Vector2i, color: Color):
+	var center = map_point(p) + Vector2(17, 17)
 	for direction in DIRS:
 		if tile_at(p + direction) == "=":
 			var normal = Vector2(direction)
 			var tangent = Vector2(-normal.y, normal.x)
-			draw_line(center + normal * 15 - tangent * 9, center + normal * 15 + tangent * 9, color, 3)
+			canvas.draw_line(center + normal * 15 - tangent * 9, center + normal * 15 + tangent * 9, color, 3)
+
+func build_map():
+	var rows: Array[String] = []
+	for y in range(MAP_SIZE):
+		var row = ""
+		for x in range(MAP_SIZE):
+			row += "#" if x == 0 or y == 0 or x == MAP_SIZE - 1 or y == MAP_SIZE - 1 else "."
+		rows.append(row)
+	MAP = rows
+	for block in [Rect2i(3, 2, 2, 2), Rect2i(7, 3, 2, 2), Rect2i(3, 6, 2, 2), Rect2i(7, 7, 2, 2)]:
+		for y in range(block.position.y, block.end.y):
+			for x in range(block.position.x, block.end.x):
+				set_tile(Vector2i(x, y), "#")
+	for i in range(BUILDINGS.size()):
+		var room = BUILDINGS[i]
+		for y in range(room.position.y, room.end.y):
+			for x in range(room.position.x, room.end.x):
+				if x == room.position.x or x == room.end.x - 1 or y == room.position.y or y == room.end.y - 1:
+					set_tile(Vector2i(x, y), "#")
+		set_tile(DOORS[i], ".")
+	for p in [Vector2i(3, 9), Vector2i(4, 9), Vector2i(10, 4), Vector2i(10, 5), Vector2i(10, 10), Vector2i(11, 10), Vector2i(4, 12), Vector2i(5, 12), Vector2i(5, 16), Vector2i(6, 17), Vector2i(17, 5), Vector2i(17, 6), Vector2i(17, 17), Vector2i(18, 17)]:
+		assert(walkable(p))
+		for y in range(-1, 2):
+			for x in range(-1, 2):
+				assert(not blocks_sight(p + Vector2i(x, y)), "Low cover must have a floor-tile gap from full walls, including diagonals")
+		set_tile(p, "=")
+
+func set_tile(p: Vector2i, value: String):
+	MAP[p.y] = MAP[p.y].substr(0, p.x) + value + MAP[p.y].substr(p.x + 1)
+
+func is_indoors(p: Vector2i) -> bool:
+	for room in BUILDINGS:
+		if Rect2i(room.position + Vector2i.ONE, room.size - Vector2i(2, 2)).has_point(p):
+			return true
+	return false
+
+func clamp_camera():
+	camera.x = clampf(camera.x, 0, MAP[0].length() * CELL - 432)
+	camera.y = clampf(camera.y, 0, MAP.size() * CELL - 432)
+
+func center_player():
+	camera = Vector2(player) * CELL + Vector2(18, 18) - Vector2(216, 216)
+	clamp_camera()
+	if is_instance_valid(map_view):
+		map_view.queue_redraw()
+
+func center_objective():
+	camera = Vector2(exfil if objective_collected else objective) * CELL + Vector2(18, 18) - Vector2(216, 216)
+	clamp_camera()
+	map_view.queue_redraw()
+
+func map_point(p: Vector2i) -> Vector2:
+	return Vector2(p) * CELL - camera
+
+func apply_loot(kind: int, source: String):
+	cargo += 1
+	var rounds = CRATE_AMMO if kind != 1 else 0
+	var healed = mini(CRATE_HEALTH, MAX_HEALTH - hp) if kind != 0 else 0
+	reserve += rounds
+	hp += healed
+	message = "%s: +%d ammo, +%d HP, +1 supply." % [source, rounds, healed]
+
+func nearby_body() -> int:
+	for i in range(enemies.size()):
+		if enemies[i].hp <= 0 and not enemies[i].get("searched", false) and distance(player, enemies[i].pos) <= 1:
+			return i
+	return -1
+
+func search_nearby_body():
+	search_body(nearby_body())
+
+func search_body(index: int):
+	if finished or index < 0 or index >= enemies.size() or (combat and ap < 1):
+		return
+	var body = enemies[index]
+	if body.hp > 0 or body.get("searched", false) or distance(player, body.pos) > 1:
+		return
+	body.searched = true
+	apply_loot(int(body.get("loot_kind", 0)), "Body")
+	ticks += 1
+	if combat:
+		ap -= 1
+	else:
+		world_tick()
+	refresh()
