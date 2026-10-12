@@ -2,7 +2,7 @@
 
 ## Identity
 
-A persistent, military extraction game for Android. Raid stakes come from what the operator carries in and successfully brings out. The current location is 24×24 with three buildings, each with one entrance. Maps are authored locations, not procedural dungeon floors. Decisions are deliberate: time advances through actions rather than reflexes.
+A persistent, military extraction game for Android. Raid stakes come from what the operator carries in and successfully brings out. The current location is 24×24 with three buildings, each with one entrance. Insertion and extraction use outdoor floor tiles in the two-tile band along the map edge, separated by at least eight tiles. Loot markers require current player sight and cannot be revealed by camera panning. Maps are authored locations, not procedural dungeon floors. Decisions are deliberate: time advances through actions rather than reflexes.
 
 ## Raid loop
 

@@ -1,6 +1,7 @@
 extends Control
 
 const MAP_SIZE = 24
+const EDGE_BAND = 2
 const BUILDINGS = [Rect2i(3, 14, 6, 6), Rect2i(14, 3, 7, 6), Rect2i(14, 14, 7, 7)]
 const DOORS = [Vector2i(6, 19), Vector2i(14, 6), Vector2i(17, 14)]
 var MAP: Array[String] = []
@@ -149,11 +150,20 @@ func new_raid():
 		var temp = floor_tiles[i]
 		floor_tiles[i] = floor_tiles[j]
 		floor_tiles[j] = temp
-	player = floor_tiles.pop_back()
-	exfil = floor_tiles.pop_back()
-	while distance(player, exfil) < 8:
-		floor_tiles.push_front(exfil)
-		exfil = floor_tiles.pop_back()
+	var insertion_tiles: Array[Vector2i] = []
+	for tile in floor_tiles:
+		if is_outskirts(tile) and not is_indoors(tile):
+			insertion_tiles.append(tile)
+	assert(not insertion_tiles.is_empty())
+	player = insertion_tiles[rng.randi_range(0, insertion_tiles.size() - 1)]
+	floor_tiles.erase(player)
+	var extraction_tiles: Array[Vector2i] = []
+	for tile in floor_tiles:
+		if is_outskirts(tile) and not is_indoors(tile) and distance(player, tile) >= 8:
+			extraction_tiles.append(tile)
+	assert(not extraction_tiles.is_empty())
+	exfil = extraction_tiles[rng.randi_range(0, extraction_tiles.size() - 1)]
+	floor_tiles.erase(exfil)
 	var objective_tiles: Array[Vector2i] = []
 	for tile in floor_tiles:
 		if is_indoors(tile) and distance(player, tile) >= OBJECTIVE_MIN_DISTANCE:
@@ -204,8 +214,11 @@ func line_of_sight(a: Vector2i, b: Vector2i) -> bool:
 			return false
 	return true
 
+func player_can_see(p: Vector2i) -> bool:
+	return distance(player, p) <= 6 and line_of_sight(player, p)
+
 func objective_visible() -> bool:
-	return not objective_collected and distance(player, objective) <= 6 and line_of_sight(player, objective)
+	return not objective_collected and player_can_see(objective)
 
 func visible(e: Dictionary) -> bool:
 	return e.hp > 0 and distance(player, e.pos) <= 6 and line_of_sight(player, e.pos)
@@ -502,6 +515,8 @@ func draw_map(canvas: Control):
 		var center = map_point(objective) + Vector2(17, 17)
 		canvas.draw_colored_polygon(PackedVector2Array([center + Vector2(0, -12), center + Vector2(12, 0), center + Vector2(0, 12), center + Vector2(-12, 0)]), Color("c89bdf"))
 	for crate in loot:
+		if not player_can_see(crate.pos):
+			continue
 		var center = map_point(crate.pos) + Vector2(17, 17)
 		canvas.draw_rect(Rect2(center - Vector2(8, 8), Vector2(16, 16)), Color("d6ad58"))
 	for i in range(enemies.size()):
@@ -623,3 +638,6 @@ func search_body(index: int):
 	else:
 		world_tick()
 	refresh()
+
+func is_outskirts(p: Vector2i) -> bool:
+	return walkable(p) and mini(mini(p.x, p.y), mini(MAP[0].length() - 1 - p.x, MAP.size() - 1 - p.y)) <= EDGE_BAND

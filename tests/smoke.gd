@@ -233,6 +233,8 @@ func test_objective_facing_loot(game) -> bool:
 		game.rng.seed = seed_value
 		game.new_raid()
 		assert(game.distance(game.player, game.objective) >= 8)
+		assert(game.is_outskirts(game.player) and not game.is_indoors(game.player))
+		assert(game.is_outskirts(game.exfil) and not game.is_indoors(game.exfil))
 		assert(game.enemies.size() == 6)
 		assert(game.objective != game.exfil and game.walkable(game.objective) and game.is_indoors(game.objective))
 		assert(game.loot.size() == 4 and not game.objective_collected)
@@ -363,6 +365,7 @@ func test_objective_visibility(game) -> bool:
 	game.objective = Vector2i(15, 5)
 	game.refresh()
 	assert(not game.objective_visible(), "Building wall must conceal nearby objective")
+	assert(not game.player_can_see(game.objective), "Loot behind a building wall must be hidden")
 	assert(game.objective_button.disabled)
 	var previous_camera = game.camera
 	game.center_objective()
@@ -370,10 +373,12 @@ func test_objective_visibility(game) -> bool:
 	game.player = Vector2i(15, 6)
 	game.refresh()
 	assert(game.objective_visible() and not game.objective_button.disabled)
+	assert(game.player_can_see(game.objective), "Nearby loot in clear sight is visible")
 	game.player = Vector2i(1, 1)
 	game.objective = Vector2i(10, 1)
 	game.refresh()
 	assert(not game.objective_visible(), "Clear sight outside range is insufficient")
+	assert(not game.player_can_see(game.objective), "Panning to distant loot does not reveal it")
 	game.objective_collected = true
 	game.exfil = Vector2i(22, 22)
 	game.refresh()
