@@ -12,9 +12,9 @@ The first prototype has one fixed location, random insertion/extraction/patrols/
 
 ## Simulation contract
 
-Exploration has no real-time updates. A tile tap finds a path; each traversed tile advances the simulation one tick, including one patrol action per living enemy. Detection interrupts the path at the first contact tick. Animation should eventually present these committed ticks without changing the underlying rules. Tick count currently measures exploration steps plus completed enemy turns; combat movement consumes AP without advancing patrols.
+Exploration has no real-time updates. Reloading advances the world one tick, just like a movement step. A tile tap finds a path; each traversed tile advances the simulation one tick, including one patrol action per living enemy. Detection interrupts the path at the first contact tick. Animation should eventually present these committed ticks without changing the underlying rules. Tick count currently measures exploration steps plus completed enemy turns; combat movement consumes AP without advancing patrols.
 
-Combat gives the player two AP before the enemy phase. Moving a tile, firing, or reloading costs one AP. Enemies have two actions each. Shots use range, line of sight, and directional wall cover to derive a displayed probability. When no living enemy remains in sight after an enemy phase, exploration resumes. A future version should retain enemy awareness and use a deliberate disengagement threshold.
+Combat gives the player two AP before the enemy phase. Moving a tile or firing costs one AP; reloading costs two AP. The gun holds seven rounds, reserve ammo is tracked separately, and crates replenish the reserve by seven rounds. Enemies have two actions each. Shots use range, line of sight, and directional wall cover to derive a displayed probability. When no living enemy remains in sight after an enemy phase, exploration resumes. A future version should retain enemy awareness and use a deliberate disengagement threshold.
 
 ## Touch controls
 

@@ -47,9 +47,12 @@ func run():
 	game.selected = 0
 	game.enemies[0].pos = Vector2i(5, 1)
 	game.shoot()
-	assert(game.ap == 1 and game.ammo == 11)
+	assert(game.ap == 1 and game.ammo == 6)
 	game.reload_weapon()
-	assert(game.ap == 0 and game.ammo == 12 and game.reserve == 23)
+	assert(game.ap == 1 and game.ammo == 6, "Combat reload must require two available AP")
+	game.ap = 2
+	game.reload_weapon()
+	assert(game.ap == 0 and game.ammo == 7 and game.reserve == 30)
 	game.player = game.exfil
 	var bank = game.stash
 	game.extract()
@@ -74,6 +77,71 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_ammo(game), "Ammo checks must all complete")
 	print("PASS: randomized placements, idle freeze, movement ticks, loot, contact interruption, AP, enemy turn, LOS, cover, range, shooting, reloading, extraction, death, 100 raid seeds")
 	game.queue_free()
 	quit(0)
+
+func test_ammo(game) -> bool:
+	game.new_raid()
+	assert(game.ammo == 7 and game.reserve == 24)
+	assert(game.ammo_status.text == "GUN 7/7  •  RESERVE 24  •  TOTAL 31")
+	game.enemies.clear()
+	game.player = Vector2i(1, 1)
+	game.exfil = Vector2i(10, 10)
+	game.ammo = 2
+	game.reserve = 3
+	game.refresh()
+	assert(not game.reload_button.disabled, "Exploration reload must be enabled")
+	game.enemies.append({"pos": Vector2i(5, 5), "hp": 60})
+	game.reload_weapon()
+	assert(game.ammo == 5 and game.reserve == 0, "Partial reload must use only available rounds")
+	assert(game.ticks == 1 and game.ap == 2)
+	assert(game.distance(game.enemies[0].pos, Vector2i(5, 5)) == 1, "Reload must advance the enemy patrol once")
+	assert(game.reload_button.disabled)
+	game.reload_weapon()
+	assert(game.ticks == 1, "No reserve ammo must not spend a tick")
+	game.reserve = 10
+	game.reload_weapon()
+	assert(game.ammo == 7 and game.reserve == 8 and game.ticks == 2)
+	game.reload_weapon()
+	assert(game.ticks == 2 and game.reserve == 8, "Full magazine must not reload")
+	game.enemies.clear()
+	game.enemies.append({"pos": Vector2i(2, 1), "hp": 60})
+	game.combat = false
+	game.ammo = 0
+	game.reload_weapon()
+	assert(game.combat and game.ap == 2 and game.ticks == 3, "Contact during exploration reload must not charge combat AP")
+	game.ammo = 0
+	game.ap = 1
+	game.refresh()
+	assert(game.reload_button.disabled)
+	game.reload_weapon()
+	assert(game.ammo == 0 and game.ap == 1 and game.ticks == 3)
+	game.ap = 2
+	game.reload_weapon()
+	assert(game.ammo == 1 and game.reserve == 0 and game.ap == 0 and game.ticks == 3)
+	game.enemies.clear()
+	game.combat = false
+	game.loot.clear()
+	game.loot.append(Vector2i(2, 1))
+	game.move_to(Vector2i(2, 1))
+	assert(game.reserve == 7 and game.ammo == 1, "Crates add reserve ammo without loading the gun")
+	game.move_to(Vector2i(1, 1))
+	game.move_to(Vector2i(2, 1))
+	assert(game.reserve == 7, "A collected crate must not grant ammo again")
+	game.combat = true
+	game.ap = 2
+	game.enemies.append({"pos": Vector2i(3, 1), "hp": 60})
+	game.selected = 0
+	game.shoot()
+	assert(game.ammo == 0 and game.reserve == 7 and game.ap == 1)
+	assert(game.ammo_status.text == "GUN 0/7  •  RESERVE 7  •  TOTAL 7")
+	game.shoot()
+	assert(game.ap == 1, "An empty gun cannot fire reserve rounds")
+	game.finished = true
+	game.ap = 2
+	game.reload_weapon()
+	assert(game.ammo == 0 and game.reserve == 7 and game.ap == 2)
+	print("PASS: ammo HUD, seven-round capacity, partial/full/empty reloads, patrol tick, detection during reload, two-AP combat reload, crate ammo, single pickup, empty gun, finished raid")
+	return true

@@ -14,6 +14,9 @@ const MAP = [
 	"#..........#",
 	"############"
 ]
+const MAGAZINE_CAPACITY = 7
+const CRATE_AMMO = 7
+const COMBAT_RELOAD_AP = 2
 const CELL = 36.0
 const ORIGIN = Vector2(24, 164)
 const DIRS = [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
@@ -24,7 +27,7 @@ var enemies: Array[Dictionary] = []
 var loot: Array[Vector2i] = []
 var hp = 100
 var ap = 2
-var ammo = 12
+var ammo = MAGAZINE_CAPACITY
 var reserve = 24
 var cargo = 0
 var stash = 0
@@ -35,6 +38,7 @@ var selected = -1
 var message = ""
 var title: Label
 var status: Label
+var ammo_status: Label
 var intel: Label
 var feed: Label
 var fire_button: Button
@@ -77,8 +81,9 @@ func make_button(text_value: String, pos: Vector2, callback: Callable) -> Button
 func make_ui():
 	title = make_label(Vector2(24, 20), Vector2(280, 32), 22, Color("e7efcf"))
 	title.text = "TD / EXTRACTION"
-	status = make_label(Vector2(24, 62), Vector2(432, 30), 17, Color("adc5af"))
-	intel = make_label(Vector2(24, 98), Vector2(432, 58), 16, Color("e0b969"))
+	status = make_label(Vector2(24, 62), Vector2(432, 24), 17, Color("adc5af"))
+	ammo_status = make_label(Vector2(24, 86), Vector2(432, 24), 16, Color("adc5af"))
+	intel = make_label(Vector2(24, 116), Vector2(432, 42), 14, Color("e0b969"))
 	feed = make_label(Vector2(24, 606), Vector2(432, 82), 16, Color("c8d7cd"))
 	feed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	fire_button = make_button("FIRE", Vector2(24, 700), shoot)
@@ -125,14 +130,14 @@ func new_raid():
 		loot.append(floor_tiles.pop_back())
 	hp = 100
 	ap = 2
-	ammo = 12
+	ammo = MAGAZINE_CAPACITY
 	reserve = 24
 	cargo = 0
 	ticks = 0
 	combat = false
 	finished = false
 	selected = -1
-	message = "Tap a tile to travel. Gold crates hold supplies. Reach the green extraction tile to bank your haul."
+	message = "Tap a tile to travel. Gold crates hold supplies and ammo. Reach the green extraction tile to bank your haul."
 	refresh()
 
 func distance(a: Vector2i, b: Vector2i) -> int:
@@ -210,7 +215,8 @@ func move_to(target: Vector2i):
 		if loot.has(player):
 			loot.erase(player)
 			cargo += 1
-			message = "Recovered supplies. Extract to keep them."
+			reserve += CRATE_AMMO
+			message = "Recovered supplies and %d reserve rounds. Extract to keep your supplies." % CRATE_AMMO
 		if not combat:
 			world_tick()
 			if combat:
@@ -218,7 +224,7 @@ func move_to(target: Vector2i):
 	refresh()
 
 func world_tick():
-	# Each player step advances every enemy exactly once; no real-time timer.
+	# Each exploration action tick advances every enemy once; no real-time timer.
 	var spotted = enemies.any(func(e): return visible(e))
 	for e in enemies:
 		if e.hp <= 0:
@@ -251,14 +257,22 @@ func shoot():
 		selected = -1
 	refresh()
 
+func can_reload() -> bool:
+	return not finished and reserve > 0 and ammo < MAGAZINE_CAPACITY and (not combat or ap >= COMBAT_RELOAD_AP)
+
 func reload_weapon():
-	if finished or not combat or ap <= 0 or reserve <= 0 or ammo >= 12:
+	if not can_reload():
 		return
-	var rounds = mini(12 - ammo, reserve)
+	var rounds = mini(MAGAZINE_CAPACITY - ammo, reserve)
 	ammo += rounds
 	reserve -= rounds
-	ap -= 1
-	message = "Reloaded %d rounds for 1 AP." % rounds
+	if combat:
+		ap -= COMBAT_RELOAD_AP
+		message = "Reloaded %d rounds for 2 AP." % rounds
+	else:
+		ticks += 1
+		message = "Reloaded %d rounds. One world tick elapsed." % rounds
+		world_tick()
 	refresh()
 
 func enemy_turn():
@@ -308,7 +322,9 @@ func extract():
 func refresh():
 	if not is_instance_valid(status):
 		return
-	status.text = "HP %d  •  AMMO %d  •  LOOT %d  •  BANK %d" % [hp, ammo, cargo, stash]
+	status.text = "HP %d  •  LOOT %d  •  BANK %d" % [hp, cargo, stash]
+	ammo_status.text = "GUN %d/%d  •  RESERVE %d  •  TOTAL %d" % [ammo, MAGAZINE_CAPACITY, reserve, ammo + reserve]
+	reload_button.tooltip_text = "Reload: 2 AP" if combat else "Reload: 1 world tick"
 	intel.text = ("COMBAT   •   %d / 2 AP" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
 	if selected >= 0 and visible(enemies[selected]):
 		intel.text += "\nTARGET %d HP   •   HIT %d%%" % [enemies[selected].hp, hit_chance(player, enemies[selected].pos)]
@@ -316,7 +332,7 @@ func refresh():
 		intel.text += "\nBlue: operator   Gold: loot   Green: exfil"
 	feed.text = message
 	fire_button.disabled = finished or not combat or selected < 0 or ap <= 0 or ammo <= 0
-	reload_button.disabled = finished or not combat or ap <= 0 or reserve <= 0 or ammo >= 12
+	reload_button.disabled = not can_reload()
 	end_button.disabled = finished or not combat
 	extract_button.disabled = finished or player != exfil
 	queue_redraw()

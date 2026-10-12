@@ -9,7 +9,7 @@ const { chromium } = require('playwright');
     page.on('pageerror', e => failures.push(e.message));
     page.on('console', m => { if (/SCRIPT ERROR|Parse Error|ERROR:/.test(m.text())) failures.push(m.text()); });
     page.on('response', r => { if(r.status() >= 400) failures.push(`${r.status()} ${r.url()}`); });
-    await page.goto('http://127.0.0.1:8000', {waitUntil:'networkidle'});
+    await page.goto(process.env.TDEXTRACT_TEST_URL || 'http://127.0.0.1:8000', {waitUntil:'networkidle'});
     await page.waitForFunction(() => !document.querySelector('#status'), {timeout:60000});
     const canvas = page.locator('canvas');
     const viewport = page.viewportSize();

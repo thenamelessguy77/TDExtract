@@ -8,8 +8,8 @@ Inspired by Mini DAYZ, Shattered Pixel Dungeon, Tarkov's raid stakes, and XCOM's
 Open `project.godot` in Godot 4.6.3 and press F6/F5, or run `godot --path .`.
 
 - Tap/click a reachable tile to travel along its shortest path. Every tile costs one world tick. The world stays still while you decide.
-- Blue is your operator, gold is supplies, green is extraction. Enemies appear within six tiles and line of sight.
-- Contact interrupts movement immediately. You get two action points per combat turn: moving one tile or firing costs one AP. Tap a hostile to select it and see its hit chance; press Fire to commit the shot. Reload costs one AP; you carry 24 reserve rounds.
+- Blue is your operator, gold is supply crates, green is extraction. Each crate adds seven rounds to your reserve along with supplies. Enemies appear within six tiles and line of sight.
+- Contact interrupts movement immediately. You get two action points per combat turn: moving one tile or firing costs one AP. Tap a hostile to select it and see its hit chance; press Fire to commit the shot. The gun holds seven rounds; you start with 24 reserve rounds. The HUD shows loaded rounds, reserve rounds, and total carried ammo (loaded + reserve). Reloading costs one world tick during exploration, or two AP in combat. A partial reload uses only the rounds you have; a full gun or empty reserve spends no time.
 - End Turn grants living enemies two actions each. Walls block line of sight; directional wall cover and distance reduce shot odds. Break contact to resume exploration.
 - Stand on the extraction tile and press Extract to bank your cargo. Death loses raid cargo. Banked supplies persist locally (`user://stash.json`); a new raid resets health and ammunition.
 
@@ -42,7 +42,7 @@ The project uses Godot's compatibility renderer, portrait orientation, and touch
 timeout 20 godot --headless --path . --script res://tests/smoke.gd
 ```
 
-The integration check exercises real scene initialization, placement uniqueness, idle freeze, movement ticks, loot pickup, travel interruption, action points, enemy turns, range/cover/LOS, firing, and extraction. It restores the existing bank after testing.
+The integration check exercises ammo tracking, partial reloads, reload tick/AP costs, crate ammo pickup, real scene initialization, placement uniqueness, idle freeze, movement ticks, loot pickup, travel interruption, action points, enemy turns, range/cover/LOS, firing, and extraction. It restores the existing bank after testing.
 
 A browser input check is available as `node tests/browser.cjs` with Playwright and Chromium installed and the HTTP server running. It tests both mouse and emulated touch startup/input and verifies the rendered world stays frozen while idle. See `DESIGN.md` for the product direction and planned increments.
 
