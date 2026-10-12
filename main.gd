@@ -14,6 +14,7 @@ const MAP = [
 	"#..........#",
 	"############"
 ]
+const RAID_ENEMY_COUNT = 3
 const MAGAZINE_CAPACITY = 7
 const CRATE_AMMO = 7
 const COMBAT_RELOAD_AP = 2
@@ -119,7 +120,7 @@ func new_raid():
 		floor_tiles.push_front(exfil)
 		exfil = floor_tiles.pop_back()
 	enemies.clear()
-	for i in range(5):
+	for i in range(RAID_ENEMY_COUNT):
 		var pos = floor_tiles.pop_back()
 		while distance(pos, player) < 5:
 			floor_tiles.push_front(pos)

@@ -10,7 +10,7 @@ func run():
 	game.rng.seed = 77
 	game.new_raid()
 	assert(game.distance(game.player, game.exfil) >= 8)
-	assert(game.enemies.size() == 5 and game.loot.size() == 7)
+	assert(game.enemies.size() == 3 and game.loot.size() == 7)
 	var cells = [game.player, game.exfil]
 	for e in game.enemies:
 		assert(game.walkable(e.pos) and not cells.has(e.pos))
