@@ -1,0 +1,55 @@
+# TDExtract
+
+Godot 4.6.3 prototype of a touch-first, grid-based military extraction game.
+Inspired by Mini DAYZ, Shattered Pixel Dungeon, Tarkov's raid stakes, and XCOM's action economy. No borrowed assets. The map is fixed; each raid randomizes your insertion, extraction, five patrols, and seven supply crates.
+
+## Play
+
+Open `project.godot` in Godot 4.6.3 and press F6/F5, or run `godot --path .`.
+
+- Tap/click a reachable tile to travel along its shortest path. Every tile costs one world tick. The world stays still while you decide.
+- Blue is your operator, gold is supplies, green is extraction. Enemies appear within six tiles and line of sight.
+- Contact interrupts movement immediately. You get two action points per combat turn: moving one tile or firing costs one AP. Tap a hostile to select it and see its hit chance; press Fire to commit the shot. Reload costs one AP; you carry 24 reserve rounds.
+- End Turn grants living enemies two actions each. Walls block line of sight; directional wall cover and distance reduce shot odds. Break contact to resume exploration.
+- Stand on the extraction tile and press Extract to bank your cargo. Death loses raid cargo. Banked supplies persist locally (`user://stash.json`); a new raid resets health and ammunition.
+
+This is an initial mechanics prototype, with abstract tactical symbols rather than final pixel art. Equipment, weapon selection, armor, sound, multiple maps, and a full stash/loadout economy are future work. Enemy AI uses simple patrols and greedy pursuit. No real-time simulation or procedural map generation.
+
+## Web testing
+
+Install matching Godot 4.6.3 export templates, then:
+
+```sh
+mkdir -p build/web
+godot --headless --path . --export-release Web build/web/index.html
+python3 -m http.server 8000 --directory build/web
+```
+
+Open the served build in a browser. Do not open the HTML directly from disk. The Web preset uses the compatibility renderer and disables threads, so COOP/COEP headers are unnecessary. Local browser persistence is origin-specific; clearing browser data clears the bank. Portrait layout scales from 480×800; mouse clicks and touch share the same input path.
+
+In this cloud environment, run `bash scripts/setup.sh` to verify the Godot version, install checksum-verified web templates, run the integration check, and export. The template download is about 1.2 GB; only the web templates are retained.
+
+For this cloud environment, use the exported XDG paths in `scripts/environment.sh` so Godot's caches and save data live in writable workspace directories.
+
+## Android
+
+The project uses Godot's compatibility renderer, portrait orientation, and touch-to-mouse emulation. To produce an APK/AAB, install matching export templates, OpenJDK 17, and the Android SDK through Godot's documented Android export setup. Add an Android export preset, set its package identifier, configure SDK/JDK paths, and configure your signing key securely. Android export and on-device validation have not been performed in this environment. Do not commit keystores or passwords.
+
+## Validation
+
+```sh
+# Fail-safe timeout also catches any assertion/script failure that leaves the runner open.
+timeout 20 godot --headless --path . --script res://tests/smoke.gd
+```
+
+The integration check exercises real scene initialization, placement uniqueness, idle freeze, movement ticks, loot pickup, travel interruption, action points, enemy turns, range/cover/LOS, firing, and extraction. It restores the existing bank after testing.
+
+A browser input check is available as `node tests/browser.cjs` with Playwright and Chromium installed and the HTTP server running. It tests both mouse and emulated touch startup/input and verifies the rendered world stays frozen while idle. See `DESIGN.md` for the product direction and planned increments.
+
+## GitHub downloads and hosting
+
+The `Build and publish web game` Actions workflow builds and tests on pushes to `main`. Its build artifact contains `TDExtract-web.zip` (artifact downloads require a GitHub login).
+
+To create a regular GitHub download, manually run the workflow with **Publish a downloadable web build** selected. It creates a prerelease with the ZIP attached. For a public repository, the release asset is downloadable without a GitHub login.
+
+To host a playable browser build, set **Settings → Pages → Source → GitHub Actions**, then manually run the workflow with **Publish the playable website** selected. The deployment reports the actual website URL after success. Downloads and hosting can be selected independently. The workflow is prepared but has not been run on GitHub.

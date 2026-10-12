@@ -1,0 +1,20 @@
+config_version=5
+
+[application]
+config/name="TDExtract — Field Operations"
+run/main_scene="res://main.tscn"
+
+[display]
+window/size/viewport_width=480
+window/size/viewport_height=800
+window/stretch/mode="canvas_items"
+window/handheld/orientation=1
+
+[rendering]
+textures/vram_compression/import_etc2_astc=true
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
+
+[input_devices]
+pointing/emulate_mouse_from_touch=true
