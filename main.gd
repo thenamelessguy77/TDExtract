@@ -445,11 +445,6 @@ func _draw():
 	for crate in loot:
 		var center = ORIGIN + Vector2(crate.pos) * CELL + Vector2(17, 17)
 		draw_rect(Rect2(center - Vector2(8, 8), Vector2(16, 16)), Color("d6ad58"))
-		if crate.kind != 1:
-			draw_line(center + Vector2(-4, -5), center + Vector2(-4, 5), Color("23332f"), 3)
-		if crate.kind != 0:
-			draw_line(center + Vector2(0, 0), center + Vector2(6, 0), Color("23332f"), 2)
-			draw_line(center + Vector2(3, -3), center + Vector2(3, 3), Color("23332f"), 2)
 	for i in range(enemies.size()):
 		var e = enemies[i]
 		if not visible(e):
