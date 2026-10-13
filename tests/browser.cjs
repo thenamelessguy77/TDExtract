@@ -67,22 +67,12 @@ const { chromium } = require('playwright');
     if(headPreview.equals(await canvas.screenshot())) throw Error('Burst selector did not update preview');
     if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Choosing a shot mode spent AP or time');
     await tapLogical(92,556);
-    const statusClip = {x:offsetX+24*scale,y:offsetY+62*scale,width:432*scale,height:24*scale};
-    const intelClip = {x:offsetX+24*scale,y:offsetY+116*scale,width:432*scale,height:42*scale};
-    const statusUnchanged = await page.screenshot({clip:statusClip});
-    const intelUnchanged = await page.screenshot({clip:intelClip});
-    for (const weapon of [1,2,3,4,0]) {
-      const previous = await canvas.screenshot();
-      await tapLogical(90,38);
-      await tapLogical(90,73+27*weapon);
-      if(previous.equals(await canvas.screenshot())) throw Error('Weapon dropdown did not select weapon '+weapon);
-      if(!statusUnchanged.equals(await page.screenshot({clip:statusClip})) || !intelUnchanged.equals(await page.screenshot({clip:intelClip}))) throw Error('Changing pre-raid weapon changed health/AP/time');
-      if(weapon === 2 || weapon === 3) {
-        const singleShot = await canvas.screenshot();
-        await tapLogical(388,556);
-        if(!singleShot.equals(await canvas.screenshot())) throw Error('Shotgun/sniper allowed burst');
-      }
-    }
+    const beforeInventory = await canvas.screenshot();
+    await tapLogical(90,38);
+    if(beforeInventory.equals(await canvas.screenshot())) throw Error('Carried-ammo inventory did not open');
+    await page.waitForTimeout(300);
+    await tapLogical(240,512);
+    if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Viewing ammo changed health/AP/time');
     const noBleeding = await canvas.screenshot();
     await tapLogical(184,610);
     if(!noBleeding.equals(await canvas.screenshot())) throw Error('Bandage button spent an action without bleeding');
@@ -103,7 +93,7 @@ const { chromium } = require('playwright');
     if (idle.equals(await canvas.screenshot())) throw Error('New Raid input failed');
     if (failures.length) throw Error(failures.join('\n'));
     await page.screenshot({path:`build/web/${touch ? 'touch' : 'mouse'}-smoke.png`});
-    console.log(`PASS: WebAssembly startup, ${touch ? 'touch' : 'mouse'} drag panning without advancing time, shot-mode controls, five weapon dropdown choices without spending time/AP, disabled unsupported bursts and unnecessary bandaging, grid input, idle freeze, new raid, no browser/script errors`);
+    console.log(`PASS: WebAssembly startup, ${touch ? 'touch' : 'mouse'} drag panning without advancing time, shot-mode controls, typed-ammo inventory open/close without spending time/AP, disabled unnecessary bandaging, grid input, idle freeze, new raid, no browser/script errors`);
     await context.close();
   }
   await browser.close();

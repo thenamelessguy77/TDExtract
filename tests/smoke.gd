@@ -4,9 +4,12 @@ func _initialize():
 	call_deferred("run")
 
 func run():
+	var save_existed = FileAccess.file_exists("user://stash.json")
+	var original_save = FileAccess.get_file_as_string("user://stash.json") if save_existed else ""
 	var game = load("res://main.tscn").instantiate()
 	root.add_child(game)
 	await process_frame
+	game.saved_gear = game.default_gear()
 	game.rng.seed = 77
 	game.new_raid()
 	assert(game.distance(game.player, game.exfil) >= 8)
@@ -93,15 +96,22 @@ func run():
 	assert(test_health_and_cover(game), "Health and cover checks must all complete")
 	assert(test_ammo(game), "Ammo checks must all complete")
 	assert(test_weapons(game), "Weapon checks must complete")
+	assert(test_gear_loot_and_persistence(game), "Typed ammo and persistent gun checks must complete")
 	assert(await test_bleeding_and_bandages(game), "Bleeding and bandage checks must complete")
 	print("PASS: randomized placements, idle freeze, movement ticks, loot, contact interruption, AP, enemy turn, LOS, cover, range, shooting, reloading, extraction, death, 100 raid seeds")
+	if save_existed:
+		var restore_file = FileAccess.open("user://stash.json", FileAccess.WRITE)
+		restore_file.store_string(original_save)
+		restore_file.close()
+	else:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path("user://stash.json"))
 	game.queue_free()
 	quit(0)
 
 func test_ammo(game) -> bool:
 	game.new_raid()
 	assert(game.ammo == 7 and game.reserve == 24)
-	assert(game.ammo_status.text == "GUN 7/7  •  AMMO 24  •  TOTAL 31")
+	assert(game.ammo_status.text == "GUN 7/7 • AMMO 24 9mm • TOTAL 31")
 	game.enemies.clear()
 	game.player = Vector2i(1, 1)
 	game.exfil = Vector2i(10, 10)
@@ -152,7 +162,7 @@ func test_ammo(game) -> bool:
 	game.selected = 0
 	game.shoot()
 	assert(game.ammo == 0 and game.reserve == 7 and game.ap == 1)
-	assert(game.ammo_status.text == "GUN 0/7  •  AMMO 7  •  TOTAL 7")
+	assert(game.ammo_status.text == "GUN 0/7 • AMMO 7 9mm • TOTAL 7")
 	game.shoot()
 	assert(game.ap == 1, "An empty gun cannot fire reserve rounds")
 	game.finished = true
@@ -681,9 +691,12 @@ func test_weapons(game) -> bool:
 	var odds = [71, 77, 60, 86, 70]
 	for weapon in range(5):
 		game.new_raid()
-		game.weapon_select.item_selected.emit(weapon)
+		var found = {"pos": game.player, "weapon_id": weapon, "ammo": magazines[weapon], "gun_available": true}
+		game.offer_gun(found)
+		game.gun_dialog.confirmed.emit()
+		game.reserve = 24
 		assert(game.weapon_id == weapon and game.ammo == magazines[weapon] and game.reserve == 24)
-		assert(game.ticks == 0 and game.ap == 4 and not game.weapon_select.disabled)
+		assert(game.ticks == 0 and game.ap == 4)
 		game.enemies.clear()
 		game.loot.clear()
 		game.player = Vector2i(1, 1)
@@ -726,18 +739,9 @@ func test_weapons(game) -> bool:
 		game.reserve = 100
 		game.reload_weapon()
 		assert(game.ammo == magazines[weapon] and game.reserve == 103 - magazines[weapon])
-		game.choose_weapon((weapon + 1) % 5)
-		assert(game.weapon_id == weapon, "Loadout must stay locked after acting")
 		game.new_raid()
-		assert(game.ammo == magazines[weapon] and not game.loadout_locked)
-	game.choose_weapon(0)
-	game.enemies.clear()
-	game.loot.clear()
-	game.player = Vector2i(1, 1)
-	game.move_to(Vector2i(2, 1))
-	game.choose_weapon(1)
-	assert(game.weapon_id == 0 and game.weapon_select.disabled, "Movement locks loadout")
-	print("PASS: five weapon profiles, body/head damage and AP, accuracy curves, burst support/consumption, shotgun range, magazine-specific partial/full reloads, pre-raid choice and loadout locking")
+		assert(game.weapon_id == 0 and game.ammo == 7, "Abandoning a raid restores the starting pistol")
+	print("PASS: five weapon profiles, body/head damage and AP, accuracy curves, burst support/consumption, shotgun range, magazine-specific partial/full reloads, optional gun swaps")
 	return true
 
 func test_bleeding_and_bandages(game) -> bool:
@@ -846,4 +850,136 @@ func test_bleeding_and_bandages(game) -> bool:
 	assert(not game.bleeding and game.bandages == 0 and game.hp == 73 and game.ap == 3)
 	game.new_raid()
 	print("PASS: bleeding chance and misses, non-stacking status, idle freeze, exploration move/reload/search ticks, single combat-round damage, healing cannot stop bleeding, bandage crate/body loot, 1-tick/1-AP treatment, invalid uses, bleeding death/travel interruption, raid reset")
+	return true
+
+func test_gear_loot_and_persistence(game) -> bool:
+	game.new_raid()
+	assert(game.weapon_id == 0 and game.ammo == 7 and game.carried_ammo == [24, 0, 0, 0, 0])
+	var crate_weapons = {}
+	var ammo_types = {}
+	var enemy_weapons = {}
+	for seed_value in range(100):
+		game.rng.seed = seed_value
+		game.new_raid()
+		for crate in game.loot:
+			assert(not crate.searched and crate.ammo_type >= 0 and crate.ammo_type < 5)
+			ammo_types[crate.ammo_type] = true
+			if crate.gun_available:
+				crate_weapons[crate.weapon_id] = true
+				assert(crate.weapon_id > 0 and crate.weapon_id < 5 and crate.ammo <= game.WEAPONS[crate.weapon_id].magazine)
+		for e in game.enemies:
+			enemy_weapons[e.weapon_id] = true
+			assert(e.ammo_type == e.weapon_id and e.ammo == game.WEAPONS[e.weapon_id].magazine and e.reserve >= 0)
+	assert(crate_weapons.size() == 4 and ammo_types.size() == 5 and enemy_weapons.size() == 5)
+	game.new_raid()
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	game.exfil = Vector2i(10, 10)
+	var crate = {"pos": Vector2i(2, 1), "kind": 0, "ammo_type": 1, "weapon_id": 1, "ammo": 6, "gun_available": true, "searched": false}
+	game.loot.append(crate)
+	game.move_to(Vector2i(5, 1))
+	assert(game.player == Vector2i(2, 1) and game.ticks == 1 and game.gun_dialog.visible, "Discovery must interrupt travel and ask before equipping")
+	assert(game.weapon_id == 0 and game.ammo == 7 and game.reserve == 24 and game.carried_ammo[1] == 7)
+	assert(game.total_ammo() == 38 and "TOTAL 38" in game.ammo_status.text, "Total ammo includes rounds of other types")
+	var cargo_before = game.cargo
+	game.gun_dialog.canceled.emit()
+	assert(game.weapon_id == 0 and not game.gun_dialog.visible and crate.gun_available)
+	game.move_to(Vector2i(1, 1))
+	game.move_to(Vector2i(2, 1))
+	assert(game.cargo == cargo_before and game.carried_ammo[1] == 7, "Revisiting revealed loot cannot duplicate supplies or ammo")
+	var tick_before = game.ticks
+	game.gun_dialog.confirmed.emit()
+	assert(game.weapon_id == 1 and game.ammo == 6 and game.reserve == 7 and game.ticks == tick_before)
+	assert(crate.weapon_id == 0 and crate.ammo == 7 and game.carried_ammo[0] == 24, "Swap leaves actual previous gun and magazine, preserving separate ammo")
+	game.carried_ammo[1] = 0
+	game.ammo = 0
+	assert(not game.can_reload(), "Pistol rounds cannot reload a rifle")
+	game.apply_loot(0, "Crate", 2)
+	assert(game.carried_ammo[2] == 7 and game.reserve == 0 and not game.can_reload())
+	game.apply_loot(0, "Crate", 1)
+	game.reload_weapon()
+	assert(game.ammo == 7 and game.reserve == 0 and game.carried_ammo[0] == 24 and game.carried_ammo[2] == 7)
+	# Recover the old pistol, then exchange back: neither gun nor ammo is duplicated.
+	game.offer_gun(crate)
+	game.take_found_gun()
+	assert(game.weapon_id == 0 and game.ammo == 7 and game.reserve == 24 and crate.weapon_id == 1 and crate.ammo == 7)
+	game.offer_gun(crate)
+	game.take_found_gun()
+	assert(game.weapon_id == 1 and game.ammo == 7 and crate.weapon_id == 0 and crate.ammo == 7)
+	# Enemy loot has the enemy's exact gun, loaded rounds, and matching loose ammo.
+	game.enemies.append({"pos": Vector2i(3, 1), "hp": 0, "weapon_id": 4, "ammo_type": 4, "ammo": 9, "reserve": 11, "loot_kind": 1, "gun_available": true, "searched": false})
+	game.search_body(0)
+	assert(game.carried_ammo[4] == 11 and game.enemies[0].reserve == 0 and game.gun_dialog.visible and game.weapon_id == 1)
+	game.decline_gun()
+	var body_tick = game.ticks
+	game.search_body(0)
+	assert(game.ticks == body_tick and game.carried_ammo[4] == 11, "Body gun can be revisited without looting ammo twice")
+	game.gun_dialog.confirmed.emit()
+	assert(game.weapon_id == 4 and game.ammo == 9 and game.reserve == 11 and game.enemies[0].weapon_id == 1 and game.enemies[0].ammo == 7)
+	game.show_inventory()
+	assert("9mm (PISTOL): 24 spare" in game.inventory_dialog.dialog_text and ".45 (SMG): 11 spare" in game.inventory_dialog.dialog_text)
+	game.inventory_dialog.hide()
+	# A real enemy uses finite ammo, matching weapon accuracy/damage/AP and reloads.
+	for weapon in range(5):
+		game.enemies.clear()
+		game.player = Vector2i(1, 1)
+		var enemy = {"pos": Vector2i(2, 1), "hp": 1000, "facing": Vector2i.LEFT, "weapon_id": weapon, "ammo_type": weapon, "ammo": 2, "reserve": 0}
+		game.enemies.append(enemy)
+		game.hp = 100
+		game.combat = true
+		game.bleeding = false
+		game.bleed_rng.seed = safe_bleed_seed()
+		game.rng.seed = 1
+		game.enemy_turn()
+		var fired = 1 if weapon in [2, 3] else 2
+		assert(enemy.ammo == 2 - fired)
+		enemy.ammo = 0
+		enemy.reserve = 0
+		var health_before = game.hp
+		game.enemy_turn()
+		assert(game.hp == health_before and enemy.ammo == 0, "Empty enemy guns with no ammo cannot fire")
+		enemy.reserve = 3
+		game.enemy_turn()
+		assert(enemy.ammo == 3 and enemy.reserve == 0 and game.hp == health_before, "Enemy reload uses both actions and matching reserve")
+	game.enemies.clear()
+	game.player = Vector2i(1, 1)
+	game.hp = 100
+	game.combat = true
+	game.bleeding = false
+	var short_range_enemy = {"pos": Vector2i(6, 1), "hp": 1000, "facing": Vector2i.LEFT, "weapon_id": 2, "ammo_type": 2, "ammo": 6, "reserve": 0, "alerted": false}
+	game.enemies.append(short_range_enemy)
+	game.enemy_turn()
+	assert(short_range_enemy.alerted and short_range_enemy.pos == Vector2i(5, 1) and short_range_enemy.ammo == 6 and game.hp == 100, "Visible out-of-range guards must investigate without firing beyond gun range")
+	# Save gun and every ammo pool on extraction, then deserialize into next raid.
+	game.enemies.clear()
+	game.combat = false
+	game.weapon_id = 4
+	game.ammo = 9
+	game.carried_ammo.assign([24, 7, 3, 2, 11])
+	game.player = game.exfil
+	game.objective_collected = true
+	var bank_before = game.stash
+	game.extract()
+	assert(game.finished and game.saved_gear.weapon_id == 4 and game.saved_gear.ammo == 9)
+	game.load_stash()
+	game.new_raid()
+	assert(game.weapon_id == 4 and game.ammo == 9 and game.carried_ammo == [24, 7, 3, 2, 11], "Extracted gear survives save/reload and next raid")
+	var unextracted = {"pos": game.player, "weapon_id": 2, "ammo": 4, "gun_available": true}
+	game.offer_gun(unextracted)
+	game.take_found_gun()
+	assert(game.weapon_id == 2)
+	game.load_stash()
+	game.new_raid()
+	assert(game.weapon_id == 4 and game.ammo == 9 and game.carried_ammo == [24, 7, 3, 2, 11], "Reopening restores secured gear but discards unextracted pickups")
+	game.hp = 1
+	game.take_damage(1)
+	assert(game.finished and game.saved_gear == game.default_gear())
+	game.load_stash()
+	game.new_raid()
+	assert(game.weapon_id == 0 and game.ammo == 7 and game.carried_ammo == [24, 0, 0, 0, 0], "Death persistently loses gun and ammo")
+	game.stash = bank_before
+	game.save_stash(game.default_gear())
+	assert(game.sanitize_gear({"weapon_id": 200, "ammo": -2, "carried_ammo": [1]}) == {"weapon_id": 4, "ammo": 0, "carried_ammo": [24, 0, 0, 0, 0]})
+	print("PASS: pistol start, random crate/enemy guns and typed ammo, take/decline/revisit without duplication, old gun recovery, wrong-ammo reload refusal, matching corpse gun and ammo, finite enemy fire/reload/AP, inventory view, persistent extraction/next raid/death reset")
 	return true

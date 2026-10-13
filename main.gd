@@ -14,11 +14,11 @@ const SHOT_PROFILES = [
 	{"name": "BURST", "accuracy": -15}
 ]
 const WEAPONS = [
-	{"name": "PISTOL", "magazine": 7, "damage": 35, "accuracy": 95, "falloff": 8, "range": 6, "ap": 1, "burst": true},
-	{"name": "RIFLE", "magazine": 20, "damage": 40, "accuracy": 95, "falloff": 6, "range": 6, "ap": 1, "burst": true},
-	{"name": "SHOTGUN", "magazine": 6, "damage": 55, "accuracy": 105, "falloff": 15, "range": 4, "ap": 2, "burst": false},
-	{"name": "SNIPER", "magazine": 5, "damage": 65, "accuracy": 95, "falloff": 3, "range": 6, "ap": 2, "burst": false},
-	{"name": "SMG", "magazine": 25, "damage": 24, "accuracy": 100, "falloff": 10, "range": 6, "ap": 1, "burst": true}
+	{"name": "PISTOL", "ammo_type": "9mm", "magazine": 7, "damage": 35, "accuracy": 95, "falloff": 8, "range": 6, "ap": 1, "burst": true},
+	{"name": "RIFLE", "ammo_type": "5.56", "magazine": 20, "damage": 40, "accuracy": 95, "falloff": 6, "range": 6, "ap": 1, "burst": true},
+	{"name": "SHOTGUN", "ammo_type": "12GA", "magazine": 6, "damage": 55, "accuracy": 105, "falloff": 15, "range": 4, "ap": 2, "burst": false},
+	{"name": "SNIPER", "ammo_type": "7.62", "magazine": 5, "damage": 65, "accuracy": 95, "falloff": 3, "range": 6, "ap": 2, "burst": false},
+	{"name": "SMG", "ammo_type": ".45", "magazine": 25, "damage": 24, "accuracy": 100, "falloff": 10, "range": 6, "ap": 1, "burst": true}
 ]
 const BLEED_CHANCE = 15
 const BLEED_DAMAGE = 3
@@ -36,10 +36,14 @@ const DIRS = [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
 var rng = RandomNumberGenerator.new()
 var bleed_rng = RandomNumberGenerator.new()
 var weapon_id = 0
-var loadout_locked = false
+var carried_ammo: Array[int] = [24, 0, 0, 0, 0]
+var saved_gear: Dictionary = {}
+var pending_gun: Dictionary = {}
+var gun_dialog: ConfirmationDialog
+var inventory_dialog: AcceptDialog
+var gear_button: Button
 var bleeding = false
 var bandages = 1
-var weapon_select: OptionButton
 var bandage_button: Button
 var player = Vector2i.ZERO
 var exfil = Vector2i.ZERO
@@ -50,7 +54,11 @@ var objective_collected = false
 var hp = MAX_HEALTH
 var ap = AP_PER_TURN
 var ammo = 7
-var reserve = 24
+var reserve: int:
+	get:
+		return carried_ammo[weapon_id]
+	set(value):
+		carried_ammo[weapon_id] = maxi(0, value)
 var cargo = 0
 var stash = 0
 var ticks = 0
@@ -85,16 +93,40 @@ func _ready():
 	build_map()
 	rng.randomize()
 	bleed_rng.randomize()
-	stash = int(load_stash())
+	load_stash()
 	make_ui()
 	new_raid()
 
+func default_gear() -> Dictionary:
+	return {"weapon_id": 0, "ammo": 7, "carried_ammo": [24, 0, 0, 0, 0]}
+
+func sanitize_gear(data: Variant) -> Dictionary:
+	if not data is Dictionary:
+		return default_gear()
+	var weapon = clampi(int(data.get("weapon_id", 0)), 0, WEAPONS.size() - 1)
+	var rounds = data.get("carried_ammo", [24, 0, 0, 0, 0])
+	if not rounds is Array or rounds.size() != WEAPONS.size():
+		rounds = [24, 0, 0, 0, 0]
+	var safe_rounds: Array[int] = []
+	for count in rounds:
+		safe_rounds.append(clampi(int(count), 0, 9999))
+	return {"weapon_id": weapon, "ammo": clampi(int(data.get("ammo", WEAPONS[weapon].magazine)), 0, WEAPONS[weapon].magazine), "carried_ammo": safe_rounds}
+
 func load_stash():
+	saved_gear = default_gear()
 	if FileAccess.file_exists("user://stash.json"):
 		var data = JSON.parse_string(FileAccess.get_file_as_string("user://stash.json"))
 		if data is Dictionary:
-			return data.get("supplies", 0)
-	return 0
+			stash = maxi(0, int(data.get("supplies", 0)))
+			saved_gear = sanitize_gear(data.get("gear", default_gear()))
+
+func save_stash(gear: Dictionary):
+	var file = FileAccess.open("user://stash.json", FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify({"supplies": stash, "gear": gear}))
+
+func current_gear() -> Dictionary:
+	return {"weapon_id": weapon_id, "ammo": ammo, "carried_ammo": carried_ammo.duplicate()}
 
 func make_label(pos: Vector2, size: Vector2, font_size: int, color: Color) -> Label:
 	var label = Label.new()
@@ -126,14 +158,22 @@ func make_ui():
 	add_child(map_view)
 	title = make_label(Vector2(170, 20), Vector2(140, 32), 16, Color("e7efcf"))
 	title.text = "TD / EXTRACT"
-	weapon_select = OptionButton.new()
-	weapon_select.position = Vector2(24, 20)
-	weapon_select.size = Vector2(136, 36)
-	weapon_select.add_theme_font_size_override("font_size", 14)
-	for weapon in WEAPONS:
-		weapon_select.add_item(weapon.name)
-	weapon_select.item_selected.connect(choose_weapon)
-	add_child(weapon_select)
+	gear_button = make_button("PISTOL", Vector2(24, 20), show_inventory)
+	gear_button.size = Vector2(136, 36)
+	gear_button.add_theme_font_size_override("font_size", 14)
+	inventory_dialog = AcceptDialog.new()
+	inventory_dialog.title = "Carried ammo"
+	inventory_dialog.ok_button_text = "CLOSE"
+	inventory_dialog.exclusive = true
+	add_child(inventory_dialog)
+	gun_dialog = ConfirmationDialog.new()
+	gun_dialog.title = "Weapon found"
+	gun_dialog.exclusive = true
+	gun_dialog.ok_button_text = "TAKE GUN"
+	gun_dialog.cancel_button_text = "KEEP CURRENT"
+	gun_dialog.confirmed.connect(take_found_gun)
+	gun_dialog.canceled.connect(decline_gun)
+	add_child(gun_dialog)
 	status = make_label(Vector2(24, 62), Vector2(432, 24), 17, Color("adc5af"))
 	ammo_status = make_label(Vector2(24, 86), Vector2(432, 24), 16, Color("adc5af"))
 	intel = make_label(Vector2(24, 116), Vector2(432, 42), 14, Color("e0b969"))
@@ -187,6 +227,15 @@ func occupied(p: Vector2i) -> bool:
 	return false
 
 func new_raid():
+	# Only extracted gear is secured; unextracted pickups are discarded on restart.
+	var gear = sanitize_gear(saved_gear)
+	weapon_id = gear.weapon_id
+	ammo = gear.ammo
+	carried_ammo.assign(gear.carried_ammo)
+	pending_gun = {}
+	if is_instance_valid(gun_dialog):
+		gun_dialog.hide()
+		inventory_dialog.hide()
 	var floor_tiles: Array[Vector2i] = []
 	for y in range(MAP.size()):
 		for x in range(MAP[0].length()):
@@ -226,7 +275,8 @@ func new_raid():
 		while distance(pos, player) < 5:
 			floor_tiles.push_front(pos)
 			pos = floor_tiles.pop_back()
-		enemies.append({"pos": pos, "hp": 60, "facing": DIRS[rng.randi_range(0, 3)], "alerted": false, "last_seen": pos})
+		var gun = rng.randi_range(0, WEAPONS.size() - 1)
+		enemies.append({"pos": pos, "hp": 60, "facing": DIRS[rng.randi_range(0, 3)], "alerted": false, "last_seen": pos, "weapon_id": gun, "ammo_type": gun, "ammo": WEAPONS[gun].magazine, "reserve": rng.randi_range(0, WEAPONS[gun].magazine), "gun_available": true})
 	loot.clear()
 	var indoor: Array[Vector2i] = []
 	var outdoor: Array[Vector2i] = []
@@ -237,24 +287,22 @@ func new_raid():
 			outdoor.append(tile)
 	for i in range(RAID_LOOT_COUNT):
 		var pool = indoor if i < RAID_LOOT_COUNT - 1 else outdoor
-		loot.append({"pos": pool.pop_back(), "kind": rng.randi_range(0, 4)})
+		var gun = rng.randi_range(1, WEAPONS.size() - 1) if rng.randf() < 0.4 else -1
+		loot.append({"pos": pool.pop_back(), "kind": rng.randi_range(0, 4), "ammo_type": rng.randi_range(0, WEAPONS.size() - 1), "weapon_id": gun, "ammo": rng.randi_range(0, WEAPONS[gun].magazine) if gun >= 0 else 0, "gun_available": gun >= 0, "searched": false})
 	# Every raid has a hidden source of bandages, with randomized placement.
 	loot[rng.randi_range(0, loot.size() - 1)].kind = rng.randi_range(3, 4)
 	hp = MAX_HEALTH
 	bleeding = false
 	bandages = 1
-	loadout_locked = false
 	ap = AP_PER_TURN
 	shot_mode = 0
 	aiming = false
-	ammo = weapon_profile().magazine
-	reserve = 24
 	cargo = 0
 	ticks = 0
 	combat = false
 	finished = false
 	selected = -1
-	message = "Choose a weapon before acting. Find the indoor objective, then extract. You carry one bandage; crates may contain more."
+	message = "Find guns and typed ammo in crates and bodies. Extract to keep your gear. Tap your weapon to view carried ammo."
 	center_player()
 	refresh()
 
@@ -348,6 +396,8 @@ func path_to(target: Vector2i) -> Array[Vector2i]:
 	return path
 
 func _gui_input(event):
+	if gun_dialog.visible or inventory_dialog.visible:
+		return
 	var bounds = Rect2(ORIGIN, MAP_VIEW_SIZE)
 	if event is InputEventMouseButton:
 		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and bounds.has_point(event.position):
@@ -375,6 +425,12 @@ func _gui_input(event):
 		pointer_last = event.position
 
 func select_tile(target: Vector2i):
+	if finished or gun_dialog.visible:
+		return
+	for crate in loot:
+		if crate.pos == target and crate.get("searched", false) and crate.get("gun_available", false) and distance(player, target) <= 1:
+			offer_gun(crate)
+			return
 	for i in range(enemies.size()):
 		if enemies[i].pos != target:
 			continue
@@ -390,6 +446,8 @@ func select_tile(target: Vector2i):
 	move_to(target)
 
 func move_to(target: Vector2i):
+	if finished or gun_dialog.visible:
+		return
 	var path = path_to(target)
 	if path.is_empty():
 		message = "Choose a reachable, unoccupied tile."
@@ -399,7 +457,7 @@ func move_to(target: Vector2i):
 		if combat and ap <= 0:
 			message = "No action points. End your turn."
 			break
-		loadout_locked = true
+		var was_combat = combat
 		player = step
 		aiming = false
 		ticks += 1
@@ -408,16 +466,23 @@ func move_to(target: Vector2i):
 		if player == objective and not objective_collected:
 			objective_collected = true
 			message = "Objective secured. Reach the green extraction tile."
-		for i in range(loot.size()):
-			if loot[i].pos == player:
-				var kind = loot[i].kind
-				loot.remove_at(i)
-				apply_loot(kind, "Crate")
+		var found_crate: Dictionary = {}
+		for crate in loot:
+			if crate.pos == player:
+				found_crate = crate
+				if not crate.get("searched", false):
+					crate.searched = true
+					apply_loot(crate.kind, "Crate", int(crate.get("ammo_type", 0)))
 				break
 		if not combat:
 			world_tick()
-			if combat:
-				break
+		if not found_crate.is_empty():
+			if not finished and found_crate.get("gun_available", false):
+				offer_gun(found_crate)
+			elif not found_crate.get("gun_available", false):
+				loot.erase(found_crate)
+		if (not was_combat and combat) or gun_dialog.visible or finished:
+			break
 	if not Rect2(camera, MAP_VIEW_SIZE).has_point(Vector2(player) * CELL + Vector2(18, 18)):
 		center_player()
 	refresh()
@@ -452,7 +517,6 @@ func patrol_step(e: Dictionary):
 		e.pos += direction
 
 func world_tick():
-	loadout_locked = true
 	advance_bleeding()
 	if finished:
 		return
@@ -501,7 +565,7 @@ func aim_weapon():
 	refresh()
 
 func can_fire() -> bool:
-	return not finished and combat and ap >= attack_ap() and (shot_mode != 2 or weapon_profile().burst) and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected]) and distance(player, enemies[selected].pos) <= weapon_profile().range
+	return not gun_dialog.visible and not finished and combat and ap >= attack_ap() and (shot_mode != 2 or weapon_profile().burst) and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected]) and distance(player, enemies[selected].pos) <= weapon_profile().range
 
 func shoot():
 	if not can_fire():
@@ -511,7 +575,6 @@ func shoot():
 	var chance = shot_chance(enemy.pos)
 	var rounds = mini(ammo, rng.randi_range(2, 3)) if shot_mode == 2 else 1
 	spot_player(enemy)
-	loadout_locked = true
 	ap -= attack_ap()
 	ammo -= rounds
 	var hits = 0
@@ -530,7 +593,6 @@ func shoot():
 
 func take_damage(amount: int):
 	if amount > 0 and not finished:
-		loadout_locked = true
 		hp = maxi(0, hp - amount)
 		aiming = false
 		if hp > 0 and not bleeding and bleed_rng.randi_range(1, 100) <= BLEED_CHANCE:
@@ -546,21 +608,53 @@ func attack_ap() -> int:
 func attack_damage() -> int:
 	return roundi(weapon_profile().damage * 60.0 / 35.0) if shot_mode == 1 else int(weapon_profile().damage)
 
-func choose_weapon(index: int):
-	if finished or loadout_locked or combat or index < 0 or index >= WEAPONS.size():
+func show_inventory():
+	var lines = ["%s: %d/%d loaded" % [weapon_profile().name, ammo, weapon_profile().magazine]]
+	for i in range(WEAPONS.size()):
+		lines.append("%s (%s): %d spare" % [WEAPONS[i].ammo_type, WEAPONS[i].name, carried_ammo[i]])
+	inventory_dialog.dialog_text = "\n".join(lines)
+	inventory_dialog.popup_centered(Vector2i(360, 270))
+
+func offer_gun(source: Dictionary):
+	if finished or not source.get("gun_available", false):
 		return
-	weapon_id = index
-	ammo = weapon_profile().magazine
-	reserve = 24
+	pending_gun = source
+	var gun = WEAPONS[int(source.weapon_id)]
+	gun_dialog.dialog_text = "Found %s • %s ammo\n%d/%d loaded • %d damage • %d AP\nSpare %s carried: %d\n\nCurrent: %s (%d/%d loaded)\nSwap guns? Your old gun stays here." % [gun.name, gun.ammo_type, int(source.get("ammo", 0)), gun.magazine, gun.damage, gun.ap, gun.ammo_type, carried_ammo[int(source.weapon_id)], weapon_profile().name, ammo, weapon_profile().magazine]
+	gun_dialog.popup_centered(Vector2i(390, 260))
+
+func decline_gun():
+	pending_gun = {}
+	gun_dialog.hide()
+	refresh()
+
+func take_found_gun():
+	if finished or pending_gun.is_empty() or not pending_gun.get("gun_available", false) or distance(player, pending_gun.pos) > 1:
+		decline_gun()
+		return
+	var previous_weapon = weapon_id
+	var previous_ammo = ammo
+	weapon_id = int(pending_gun.weapon_id)
+	ammo = clampi(int(pending_gun.get("ammo", 0)), 0, weapon_profile().magazine)
+	pending_gun.weapon_id = previous_weapon
+	pending_gun.ammo_type = previous_weapon
+	pending_gun.ammo = previous_ammo
 	shot_mode = 0
 	aiming = false
-	message = "%s: %d damage, %d-round magazine, %d-tile range, %d AP per shot.%s" % [weapon_profile().name, attack_damage(), ammo, weapon_profile().range, attack_ap(), " Burst available." if weapon_profile().burst else " Single shots only."]
+	message = "Equipped %s (%s). Left %s behind. Matching spare ammo: %d." % [weapon_profile().name, weapon_profile().ammo_type, WEAPONS[previous_weapon].name, reserve]
+	pending_gun = {}
+	gun_dialog.hide()
 	refresh()
 
 func check_death():
 	if hp <= 0:
 		hp = 0
 		finished = true
+		saved_gear = default_gear()
+		save_stash(saved_gear)
+		if is_instance_valid(gun_dialog):
+			gun_dialog.hide()
+		pending_gun = {}
 		message = "Operator lost. Raid cargo lost. Your banked supplies are safe. Start a new raid."
 
 func advance_bleeding():
@@ -572,12 +666,11 @@ func advance_bleeding():
 	check_death()
 
 func can_bandage() -> bool:
-	return not finished and bleeding and bandages > 0 and (not combat or ap >= 1)
+	return not gun_dialog.visible and not finished and bleeding and bandages > 0 and (not combat or ap >= 1)
 
 func use_bandage():
 	if not can_bandage():
 		return
-	loadout_locked = true
 	bandages -= 1
 	bleeding = false
 	message = "Bandaged. Bleeding stopped; no health restored."
@@ -589,12 +682,11 @@ func use_bandage():
 	refresh()
 
 func can_reload() -> bool:
-	return not finished and reserve > 0 and ammo < weapon_profile().magazine and (not combat or ap >= COMBAT_RELOAD_AP)
+	return not gun_dialog.visible and not finished and reserve > 0 and ammo < weapon_profile().magazine and (not combat or ap >= COMBAT_RELOAD_AP)
 
 func reload_weapon():
 	if not can_reload():
 		return
-	loadout_locked = true
 	var rounds = mini(weapon_profile().magazine - ammo, reserve)
 	ammo += rounds
 	reserve -= rounds
@@ -608,7 +700,7 @@ func reload_weapon():
 	refresh()
 
 func enemy_turn():
-	if finished or not combat:
+	if finished or not combat or gun_dialog.visible:
 		return
 	var damage = 0
 	for e in enemies:
@@ -616,15 +708,35 @@ func enemy_turn():
 			break
 		if e.hp <= 0:
 			continue
-		# Each enemy has two actions: move one cell or fire once per action.
-		for action in range(2):
+		var enemy_weapon = WEAPONS[int(e.get("weapon_id", 0))]
+		if not e.has("ammo"):
+			e.ammo = enemy_weapon.magazine
+			e.reserve = 24
+		var actions = 2
+		while actions > 0:
+			actions -= 1
 			if finished:
 				break
-			if enemy_can_see_player(e):
+			var sees_player = enemy_can_see_player(e)
+			if sees_player:
 				spot_player(e)
-				if rng.randi_range(1, 100) <= hit_chance(e.pos, player):
-					take_damage(12)
-					damage += 12
+			if sees_player and distance(e.pos, player) <= enemy_weapon.range:
+				if int(e.ammo) <= 0:
+					if actions >= 1 and int(e.get("reserve", 0)) > 0:
+						var loaded = mini(enemy_weapon.magazine, int(e.reserve))
+						e.ammo = loaded
+						e.reserve -= loaded
+						actions -= 1
+					continue
+				if enemy_weapon.ap > actions + 1:
+					continue
+				actions -= enemy_weapon.ap - 1
+				e.ammo -= 1
+				var chance = clampi(enemy_weapon.accuracy - distance(e.pos, player) * enemy_weapon.falloff - (COVER_PENALTY if cover_at(player, e.pos) else 0), 15, 95)
+				if rng.randi_range(1, 100) <= chance:
+					var dealt = roundi(enemy_weapon.damage / 3.0)
+					take_damage(dealt)
+					damage += dealt
 			elif e.get("alerted", false):
 				var target = Vector2i(e.get("last_seen", e.pos))
 				var best = e.pos
@@ -641,9 +753,7 @@ func enemy_turn():
 	message = "Enemy turn: %d damage. Your turn." % damage
 	advance_bleeding()
 	if hp <= 0:
-		hp = 0
-		finished = true
-		message = "Operator lost. Raid cargo lost. Your banked supplies are safe. Start a new raid."
+		check_death()
 	elif not enemies.any(func(e): return enemy_can_see_player(e)):
 		combat = false
 		selected = -1
@@ -658,6 +768,8 @@ func enemy_turn():
 	refresh()
 
 func extract():
+	if gun_dialog.visible:
+		return
 	if finished or player != exfil:
 		return
 	if not objective_collected:
@@ -665,12 +777,17 @@ func extract():
 		refresh()
 		return
 	stash += cargo
-	var file = FileAccess.open("user://stash.json", FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify({"supplies": stash}))
+	saved_gear = current_gear()
+	save_stash(saved_gear)
 	finished = true
-	message = "Extraction successful. %d supplies banked. Start a new raid." % cargo
+	message = "Extraction successful. %d supplies banked. %s and ammo saved for your next raid." % [cargo, weapon_profile().name]
 	refresh()
+
+func total_ammo() -> int:
+	var total = ammo
+	for rounds in carried_ammo:
+		total += rounds
+	return total
 
 func refresh():
 	if not is_instance_valid(status):
@@ -678,7 +795,7 @@ func refresh():
 	if selected >= 0 and (selected >= enemies.size() or not visible(enemies[selected])):
 		selected = -1
 	status.text = "HP %d • LOOT %d • BANK %d • OBJ %s" % [hp, cargo, stash, "OK" if objective_collected else "--"]
-	ammo_status.text = "GUN %d/%d  •  AMMO %d  •  TOTAL %d" % [ammo, weapon_profile().magazine, reserve, ammo + reserve]
+	ammo_status.text = "GUN %d/%d • AMMO %d %s • TOTAL %d" % [ammo, weapon_profile().magazine, reserve, weapon_profile().ammo_type, total_ammo()]
 	reload_button.tooltip_text = "Reload: 2 AP" if combat else "Reload: 1 world tick"
 	intel.add_theme_color_override("font_color", Color("ef9585") if bleeding else Color("e0b969"))
 	intel.text = ("COMBAT • %d/4 AP" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
@@ -689,7 +806,7 @@ func refresh():
 	if adjacent_cover(player):
 		intel.text += "   •   COVER"
 	if selected >= 0 and visible(enemies[selected]):
-		intel.text += "\nTARGET %d HP • HIT %d%%%s" % [enemies[selected].hp, shot_chance(enemies[selected].pos), " • OUT OF RANGE" if distance(player, enemies[selected].pos) > weapon_profile().range else (" • COVER" if cover_at(enemies[selected].pos, player) else "")]
+		intel.text += "\n%s %d HP • HIT %d%%%s" % [WEAPONS[int(enemies[selected].get("weapon_id", 0))].name, enemies[selected].hp, shot_chance(enemies[selected].pos), " • OUT OF RANGE" if distance(player, enemies[selected].pos) > weapon_profile().range else (" • COVER" if cover_at(enemies[selected].pos, player) else "")]
 	else:
 		intel.text += "\nPurple: objective • Green: exfil • Arrows: facing"
 	feed.text = message
@@ -700,9 +817,8 @@ func refresh():
 		shot_buttons[i].set_pressed_no_signal(i == shot_mode)
 		shot_buttons[i].tooltip_text = "%d damage, %+d accuracy points, %d AP" % [roundi(weapon_profile().damage * 60.0 / 35.0) if i == 1 else weapon_profile().damage, SHOT_PROFILES[i].accuracy, 2 if i == 2 else weapon_profile().ap]
 		shot_buttons[i].disabled = finished or (i == 2 and not weapon_profile().burst)
-	weapon_select.select(weapon_id)
-	weapon_select.disabled = finished or loadout_locked or combat
-	weapon_select.tooltip_text = "Choose your weapon before your first action. Locked for the rest of this raid."
+	gear_button.text = "%s • %s" % [weapon_profile().name, weapon_profile().ammo_type]
+	gear_button.tooltip_text = "View all carried ammo types. Guns are found in crates and bodies."
 	bandage_button.text = "BANDAGE (%d)" % bandages
 	bandage_button.disabled = not can_bandage()
 	bandage_button.tooltip_text = "Stop bleeding: 1 AP, no healing" if combat else "Stop bleeding: 1 world tick, no healing"
@@ -742,7 +858,7 @@ func draw_map(canvas: Control):
 		if not player_can_see(crate.pos):
 			continue
 		var center = map_point(crate.pos) + Vector2(17, 17)
-		canvas.draw_rect(Rect2(center - Vector2(8, 8), Vector2(16, 16)), Color("d6ad58"))
+		canvas.draw_rect(Rect2(center - Vector2(8, 8), Vector2(16, 16)), Color("a99665") if crate.get("searched", false) else Color("d6ad58"))
 	for i in range(enemies.size()):
 		var e = enemies[i]
 		if e.hp <= 0:
@@ -831,39 +947,49 @@ func center_objective():
 func map_point(p: Vector2i) -> Vector2:
 	return Vector2(p) * CELL - camera
 
-func apply_loot(kind: int, source: String):
+func apply_loot(kind: int, source: String, ammo_type: int = 0, ammo_amount: int = -1):
 	cargo += 1
-	var rounds = CRATE_AMMO if kind in [0, 2, 4] else 0
+	var rounds = ammo_amount if ammo_amount >= 0 else (CRATE_AMMO if kind in [0, 2, 4] else 0)
 	var healed = mini(CRATE_HEALTH, MAX_HEALTH - hp) if kind in [1, 2, 4] else 0
-	reserve += rounds
+	carried_ammo[ammo_type] += rounds
 	hp += healed
 	var dressings = 1 if kind in [3, 4] else 0
 	bandages += dressings
-	message = "%s: +%d ammo, +%d HP, +%d bandage, +1 supply." % [source, rounds, healed, dressings]
+	message = "%s: +%d %s, +%d HP, +%d bandage, +1 supply." % [source, rounds, WEAPONS[ammo_type].ammo_type, healed, dressings]
 
 func nearby_body() -> int:
-	for i in range(enemies.size()):
-		if enemies[i].hp <= 0 and not enemies[i].get("searched", false) and distance(player, enemies[i].pos) <= 1:
-			return i
+	# Prefer fresh bodies over already-searched bodies holding a swapped gun.
+	for searched in [false, true]:
+		for i in range(enemies.size()):
+			var body = enemies[i]
+			if body.hp <= 0 and body.get("searched", false) == searched and (not searched or body.get("gun_available", false)) and distance(player, body.pos) <= 1:
+				return i
 	return -1
 
 func search_nearby_body():
 	search_body(nearby_body())
 
 func search_body(index: int):
+	if gun_dialog.visible:
+		return
 	if finished or index < 0 or index >= enemies.size() or (combat and ap < 1):
 		return
 	var body = enemies[index]
-	if body.hp > 0 or body.get("searched", false) or distance(player, body.pos) > 1:
+	if body.hp > 0 or distance(player, body.pos) > 1:
 		return
-	loadout_locked = true
+	if body.get("searched", false):
+		offer_gun(body)
+		return
 	body.searched = true
-	apply_loot(int(body.get("loot_kind", 0)), "Body")
+	apply_loot(int(body.get("loot_kind", 0)), "Body", int(body.get("weapon_id", 0)), int(body.get("reserve", CRATE_AMMO)))
+	body.reserve = 0
 	ticks += 1
 	if combat:
 		ap -= 1
 	else:
 		world_tick()
+	if not finished and body.get("gun_available", false):
+		offer_gun(body)
 	refresh()
 
 func is_outskirts(p: Vector2i) -> bool:
@@ -902,7 +1028,6 @@ func corner_cover_at(p: Vector2i, attacker: Vector2i) -> bool:
 	return false
 
 func enter_combat():
-	loadout_locked = true
 	if not combat:
 		ap = AP_PER_TURN
 	combat = true
