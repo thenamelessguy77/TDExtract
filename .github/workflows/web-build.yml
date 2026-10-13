@@ -49,7 +49,9 @@ jobs:
           godot --headless --path . --editor --quit
           timeout 20 godot --headless --path . --script res://tests/smoke.gd
           mkdir -p build/web
-          godot --headless --path . --export-release Web build/web/index.html
+          web_name="game-${GITHUB_SHA:0:12}"
+          godot --headless --path . --export-release Web "build/web/$web_name.html"
+          cp "build/web/$web_name.html" build/web/index.html
           touch build/web/.nojekyll
           (cd build/web && zip -r ../TDExtract-web.zip .)
       - uses: actions/upload-artifact@v4
