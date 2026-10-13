@@ -102,6 +102,7 @@ func run():
 	assert(test_enemy_ai(game), "Enemy AI checks must complete")
 	assert(test_sight_and_zoom(game), "Sight and zoom checks must complete")
 	assert(await test_animated_movement(game), "Animated movement checks must complete")
+	assert(await test_shot_meter(game), "Shot timing checks must complete")
 	print("PASS: randomized placements, idle freeze, movement ticks, loot, contact interruption, AP, enemy turn, LOS, cover, range, shooting, reloading, extraction, death, 100 raid seeds")
 	if save_existed:
 		var restore_file = FileAccess.open("user://stash.json", FileAccess.WRITE)
@@ -1267,4 +1268,94 @@ func test_enemy_ai(game) -> bool:
 	assert(game.combat and game.ap == 3 and game.ammo == ammo_before - 1, "Choosing Fire explicitly starts combat with normal shot costs")
 	game.new_raid()
 	print("PASS: player/enemy gunshot hearing and range, wall-independent sound, route-based investigation/search/expiry, unreachable timeout, remembered contact, straight randomized patrol legs and blocked turns, silent rear takedown cost/gear/noise, invalid takedowns")
+	return true
+
+func test_shot_meter(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	var target = {"pos": Vector2i(4, 1), "hp": 1000, "facing": Vector2i.RIGHT}
+	game.enemies.append(target)
+	game.selected = 0
+	game.combat = true
+	game.meter_rng.seed = 42
+	game.begin_shot()
+	assert(game.meter_active and game.meter_overlay.visible and game.busy())
+	assert(game.ap == 4 and game.ammo == 7 and game.ticks == 0, "Preparing a shot spends nothing")
+	var position_before = game.meter_position
+	game.enemy_turn()
+	game.move_to(Vector2i(2, 1))
+	game.reload_weapon()
+	game.choose_shot(1)
+	assert(game.player == Vector2i(1, 1) and game.ticks == 0 and game.shot_mode == 0)
+	await create_timer(0.03).timeout
+	assert(game.meter_position != position_before and game.hp == 100 and game.ap == 4 and game.ammo == 7 and target.pos == Vector2i(4, 1), "Meter moves while the tactical world stays frozen")
+	game.meter_position = game.meter_center
+	var tap = InputEventMouseButton.new()
+	tap.button_index = MOUSE_BUTTON_LEFT
+	tap.pressed = true
+	game.meter_input(tap)
+	assert(not game.meter_active and not game.meter_overlay.visible and game.last_shot_modifier == 20 and game.last_shot_chance == 95)
+	assert(game.ap == 3 and game.ammo == 6 and "GREEN timing" in game.message)
+	game.resolve_shot_meter()
+	assert(game.ap == 3 and game.ammo == 6, "A timing tap resolves only once")
+	game.ap = 4
+	game.begin_shot()
+	game.meter_position = 0
+	var key = InputEventKey.new()
+	key.keycode = KEY_SPACE
+	key.pressed = true
+	game.meter_input(key)
+	assert(game.last_shot_modifier == -25 and game.last_shot_chance == 55 and game.ap == 3 and game.ammo == 5)
+	game.ap = 4
+	game.begin_shot()
+	game.meter_position = game.meter_center + game.meter_width / 2 + 0.05
+	game.resolve_shot_meter()
+	assert(game.last_shot_modifier == 0 and game.last_shot_chance == 80)
+	var settings = {}
+	for i in range(12):
+		game.ap = 4
+		game.ammo = 7
+		game.begin_shot()
+		settings[str([game.meter_speed, game.meter_center, game.meter_width, game.meter_phase])] = true
+		assert(game.meter_speed >= 1.3 and game.meter_speed <= 2.0 and game.meter_width >= 0.10 and game.meter_width <= 0.14)
+		game.meter_position = game.meter_center
+		game.resolve_shot_meter()
+	assert(settings.size() == 12, "Each shot receives varied meter timing")
+	target.hp = 1000
+	game.ap = 4
+	game.ammo = 7
+	game.choose_shot(2)
+	game.rng.seed = 42
+	var rolls = RandomNumberGenerator.new()
+	rolls.seed = 42
+	var rounds = rolls.randi_range(2, 3)
+	var hits = 0
+	for i in range(rounds):
+		if rolls.randi_range(1, 100) <= 85:
+			hits += 1
+	game.begin_shot()
+	game.meter_position = game.meter_center
+	game.resolve_shot_meter()
+	assert(game.last_shot_chance == 85 and game.ap == 2 and game.ammo == 7 - rounds and target.hp == 1000 - hits * 35, "One meter modifier applies to every burst round with normal ammo/AP costs")
+	game.choose_shot(0)
+	game.ap = 4
+	game.ammo = 7
+	game.begin_shot()
+	target.pos = Vector2i(20, 1)
+	game.resolve_shot_meter()
+	assert(game.ammo == 7 and game.ap == 4 and not game.meter_active, "Invalidated targets do not spend shot costs")
+	target.pos = Vector2i(4, 1)
+	game.selected = 0
+	game.ammo = 0
+	game.begin_shot()
+	assert(not game.meter_active, "Empty guns cannot start timing")
+	game.ammo = 7
+	game.begin_shot()
+	assert(game.meter_active)
+	game.new_raid()
+	game.resolve_shot_meter()
+	assert(not game.meter_active and not game.meter_overlay.visible and game.ticks == 0 and game.ap == 4)
+	print("PASS: moving randomized shot meter, frozen world and locked input, green/yellow/red accuracy modifiers and caps, mouse/keyboard commit, single-resolution ammo/AP costs, whole-burst modifier, invalid targets/empty guns, raid reset")
 	return true

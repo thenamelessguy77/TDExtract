@@ -11,6 +11,8 @@ var DOORS: Array[Vector2i] = []
 var MAP: Array[String] = []
 const AP_PER_TURN = 4
 const AIM_BONUS = 30
+const TIMING_BONUS = 20
+const TIMING_PENALTY = -25
 const SIGHT_RANGE = 10
 const HEARING_RANGE = 12
 const INVESTIGATION_ACTIONS = 32
@@ -52,6 +54,17 @@ var motion_epoch = 0
 var motion_tween: Tween
 var player_draw_pos = Vector2.ZERO
 var player_motion: Array[Vector2] = []
+var meter_rng = RandomNumberGenerator.new()
+var meter_active = false
+var meter_phase = 0.0
+var meter_position = 0.0
+var meter_speed = 1.5
+var meter_center = 0.5
+var meter_width = 0.12
+var pending_shot: Dictionary = {}
+var meter_overlay: Control
+var last_shot_modifier = 0
+var last_shot_chance = 0
 var rng = RandomNumberGenerator.new()
 var bleed_rng = RandomNumberGenerator.new()
 var weapon_id = 0
@@ -120,6 +133,7 @@ func _ready():
 	build_map()
 	rng.randomize()
 	bleed_rng.randomize()
+	meter_rng.randomize()
 	load_stash()
 	make_ui()
 	new_raid()
@@ -230,7 +244,7 @@ func make_ui():
 	bandage_button.size = Vector2(99, 44)
 	bandage_button.add_theme_font_size_override("font_size", 12)
 	shot_info = make_label(Vector2(246, 588), Vector2(210, 48), 12, Color("e0b969"))
-	fire_button = make_button("FIRE", Vector2(24, 700), shoot)
+	fire_button = make_button("FIRE", Vector2(24, 700), begin_shot)
 	reload_button = make_button("RELOAD", Vector2(135, 700), reload_weapon)
 	end_button = make_button("END TURN", Vector2(246, 700), enemy_turn)
 	extract_button = make_button("EXTRACT", Vector2(357, 700), extract)
@@ -240,6 +254,15 @@ func make_ui():
 	objective_button = make_button("OBJECTIVE", Vector2(320, 756), center_objective)
 	objective_button.size = Vector2(136, 40)
 	make_button("NEW RAID", Vector2(320, 20), new_raid).size = Vector2(136, 36)
+	meter_overlay = Control.new()
+	meter_overlay.set_script(load("res://shot_meter.gd"))
+	meter_overlay.game = self
+	meter_overlay.size = Vector2(480, 800)
+	meter_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	meter_overlay.focus_mode = Control.FOCUS_ALL
+	meter_overlay.gui_input.connect(meter_input)
+	meter_overlay.hide()
+	add_child(meter_overlay)
 
 func tile_at(p: Vector2i) -> String:
 	if p.x < 0 or p.y < 0 or p.y >= MAP.size() or p.x >= MAP[0].length():
@@ -265,6 +288,10 @@ func occupied(p: Vector2i) -> bool:
 	return false
 
 func new_raid():
+	meter_active = false
+	pending_shot = {}
+	if is_instance_valid(meter_overlay):
+		meter_overlay.hide()
 	motion_epoch += 1
 	if is_instance_valid(motion_tween):
 		motion_tween.kill()
@@ -563,7 +590,7 @@ func move_to(target: Vector2i):
 	refresh()
 
 func busy() -> bool:
-	return movement_active or animation_running
+	return movement_active or animation_running or meter_active
 
 func begin_motion():
 	player_draw_pos = Vector2(player)
@@ -799,6 +826,8 @@ func focus_contact(e: Dictionary):
 	map_view.queue_redraw()
 
 func choose_shot(mode: int):
+	if meter_active:
+		return
 	if mode < 0 or mode >= SHOT_PROFILES.size() or (mode == 2 and not weapon_profile().burst):
 		return
 	shot_mode = mode
@@ -820,14 +849,71 @@ func aim_weapon():
 func can_fire() -> bool:
 	return not busy() and not gun_dialog.visible and not finished and (ap if combat else AP_PER_TURN) >= attack_ap() and (shot_mode != 2 or weapon_profile().burst) and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected]) and distance(player, enemies[selected].pos) <= weapon_profile().range
 
-func shoot():
+func begin_shot():
+	if not can_fire() or inventory_dialog.visible:
+		return
+	pending_shot = {"target": enemies[selected], "index": selected, "mode": shot_mode, "weapon": weapon_id, "epoch": motion_epoch}
+	meter_speed = meter_rng.randf_range(1.3, 2.0)
+	meter_center = meter_rng.randf_range(0.24, 0.76)
+	meter_width = meter_rng.randf_range(0.10, 0.14)
+	meter_position = meter_rng.randf_range(0.0, 0.10)
+	meter_phase = meter_position if meter_rng.randi_range(0, 1) == 0 else 1.0 + meter_position
+	meter_position = meter_phase if meter_phase <= 1 else 2.0 - meter_phase
+	meter_active = true
+	pointer_down = false
+	refresh()
+	meter_overlay.show()
+	meter_overlay.grab_focus()
+	meter_overlay.queue_redraw()
+
+func _process(delta: float):
+	if not meter_active:
+		return
+	meter_phase = fposmod(meter_phase + delta * meter_speed, 2.0)
+	meter_position = meter_phase if meter_phase <= 1.0 else 2.0 - meter_phase
+	meter_overlay.queue_redraw()
+
+func meter_input(event: InputEvent):
+	if not meter_active:
+		return
+	if (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed) or (event is InputEventKey and event.pressed and not event.echo and event.keycode in [KEY_SPACE, KEY_ENTER]):
+		meter_overlay.accept_event()
+		resolve_shot_meter()
+
+func timing_modifier_at(position_value: float) -> int:
+	var error = absf(position_value - meter_center)
+	if error <= meter_width / 2:
+		return TIMING_BONUS
+	if error <= meter_width / 2 + 0.10:
+		return 0
+	return TIMING_PENALTY
+
+func resolve_shot_meter():
+	if not meter_active:
+		return
+	var request = pending_shot
+	var modifier = timing_modifier_at(meter_position)
+	meter_active = false
+	pending_shot = {}
+	meter_overlay.hide()
+	if request.is_empty() or request.epoch != motion_epoch or selected != request.index or shot_mode != request.mode or weapon_id != request.weapon or not can_fire() or enemies[selected] != request.target:
+		message = "Shot canceled: target or weapon no longer valid."
+		refresh()
+		return
+	shoot(modifier)
+	message = "%s timing (%+d): %d%% hit chance. " % ["GREEN" if modifier > 0 else ("RED" if modifier < 0 else "YELLOW"), modifier, last_shot_chance] + message
+	refresh()
+
+func shoot(timing_modifier: int = 0):
 	if not can_fire():
 		return
 	if not combat:
 		enter_combat()
 	var enemy = enemies[selected]
 	var profile = SHOT_PROFILES[shot_mode]
-	var chance = shot_chance(enemy.pos)
+	var chance = clampi(shot_chance(enemy.pos) + timing_modifier, 5, 95)
+	last_shot_modifier = timing_modifier
+	last_shot_chance = chance
 	var rounds = mini(ammo, rng.randi_range(2, 3)) if shot_mode == 2 else 1
 	spot_player(enemy)
 	hear_gunshot(player)
