@@ -56,7 +56,7 @@ var player_draw_pos = Vector2.ZERO
 var player_motion: Array[Vector2] = []
 var meter_rng = RandomNumberGenerator.new()
 var meter_active = false
-var meter_phase = 0.0
+var meter_direction = 1.0
 var meter_position = 0.0
 var meter_speed = 1.5
 var meter_center = 0.5
@@ -857,8 +857,9 @@ func begin_shot():
 	meter_center = meter_rng.randf_range(0.24, 0.76)
 	meter_width = meter_rng.randf_range(0.10, 0.14)
 	meter_position = meter_rng.randf_range(0.0, 0.10)
-	meter_phase = meter_position if meter_rng.randi_range(0, 1) == 0 else 1.0 + meter_position
-	meter_position = meter_phase if meter_phase <= 1 else 2.0 - meter_phase
+	meter_direction = 1.0 if meter_rng.randi_range(0, 1) == 0 else -1.0
+	if meter_direction < 0:
+		meter_position = 1.0 - meter_position
 	meter_active = true
 	pointer_down = false
 	refresh()
@@ -869,8 +870,11 @@ func begin_shot():
 func _process(delta: float):
 	if not meter_active:
 		return
-	meter_phase = fposmod(meter_phase + delta * meter_speed, 2.0)
-	meter_position = meter_phase if meter_phase <= 1.0 else 2.0 - meter_phase
+	meter_position += delta * meter_speed * meter_direction
+	if meter_position >= 1.0 or meter_position <= 0.0:
+		meter_position = clampf(meter_position, 0.0, 1.0)
+		resolve_shot_meter(true)
+		return
 	meter_overlay.queue_redraw()
 
 func meter_input(event: InputEvent):
@@ -888,11 +892,11 @@ func timing_modifier_at(position_value: float) -> int:
 		return 0
 	return TIMING_PENALTY
 
-func resolve_shot_meter():
+func resolve_shot_meter(timed_out: bool = false):
 	if not meter_active:
 		return
 	var request = pending_shot
-	var modifier = timing_modifier_at(meter_position)
+	var modifier = TIMING_PENALTY if timed_out else timing_modifier_at(meter_position)
 	meter_active = false
 	pending_shot = {}
 	meter_overlay.hide()
@@ -901,7 +905,7 @@ func resolve_shot_meter():
 		refresh()
 		return
 	shoot(modifier)
-	message = "%s timing (%+d): %d%% hit chance. " % ["GREEN" if modifier > 0 else ("RED" if modifier < 0 else "YELLOW"), modifier, last_shot_chance] + message
+	message = "%s timing (%+d): %d%% hit chance. " % ["TIMEOUT" if timed_out else ("GREEN" if modifier > 0 else ("RED" if modifier < 0 else "YELLOW")), modifier, last_shot_chance] + message
 	refresh()
 
 func shoot(timing_modifier: int = 0):

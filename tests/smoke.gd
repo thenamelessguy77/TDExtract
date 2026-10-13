@@ -1313,12 +1313,31 @@ func test_shot_meter(game) -> bool:
 	game.meter_position = game.meter_center + game.meter_width / 2 + 0.05
 	game.resolve_shot_meter()
 	assert(game.last_shot_modifier == 0 and game.last_shot_chance == 80)
+	for direction in [-1.0, 1.0]:
+		game.ap = 4
+		game.ammo = 7
+		game.begin_shot()
+		game.meter_direction = direction
+		game.meter_position = 0.01 if direction < 0 else 0.99
+		game._process(0.02)
+		assert(not game.meter_active and not game.meter_overlay.visible)
+		assert(game.last_shot_modifier == -25 and game.last_shot_chance == 55 and "TIMEOUT timing" in game.message)
+		assert(game.ap == 3 and game.ammo == 6 and game.ticks == 0, "Either end automatically fires with the penalty")
+		game.meter_input(tap)
+		game._process(1.0)
+		assert(game.ap == 3 and game.ammo == 6, "Late taps and frames cannot fire twice")
+	game.ap = 4
+	game.ammo = 7
+	game.begin_shot()
+	game.meter_speed = 20.0
+	await create_timer(0.15).timeout
+	assert(not game.meter_active and game.ap == 3 and game.ammo == 6 and game.last_shot_modifier == -25, "Real-time expiry fires without input")
 	var settings = {}
 	for i in range(12):
 		game.ap = 4
 		game.ammo = 7
 		game.begin_shot()
-		settings[str([game.meter_speed, game.meter_center, game.meter_width, game.meter_phase])] = true
+		settings[str([game.meter_speed, game.meter_center, game.meter_width, game.meter_direction])] = true
 		assert(game.meter_speed >= 1.3 and game.meter_speed <= 2.0 and game.meter_width >= 0.10 and game.meter_width <= 0.14)
 		game.meter_position = game.meter_center
 		game.resolve_shot_meter()
