@@ -52,6 +52,8 @@ var movement_active = false
 var animation_running = false
 var motion_epoch = 0
 var motion_tween: Tween
+var sight_overlay_key: Array = []
+var sight_overlay_cells: Dictionary = {}
 var player_draw_pos = Vector2.ZERO
 var player_motion: Array[Vector2] = []
 var meter_rng = RandomNumberGenerator.new()
@@ -652,11 +654,14 @@ func facing_toward(delta: Vector2i) -> Vector2i:
 	return Vector2i(0, signi(delta.y)) if delta.y != 0 else Vector2i.LEFT
 
 func enemy_can_see_player(e: Dictionary) -> bool:
-	if not visible(e):
+	return enemy_can_see_tile(e, player)
+
+func enemy_can_see_tile(e: Dictionary, target: Vector2i) -> bool:
+	if e.hp <= 0 or distance(e.pos, target) > SIGHT_RANGE or not line_of_sight(e.pos, target):
 		return false
-	if not combat and not e.get("alerted", false) and low_cover_at(player, e.pos):
+	if not combat and not e.get("alerted", false) and low_cover_at(target, e.pos):
 		return false
-	var delta = player - Vector2i(e.pos)
+	var delta = target - Vector2i(e.pos)
 	var facing = Vector2i(e.get("facing", Vector2i.LEFT))
 	var forward = delta.x * facing.x + delta.y * facing.y
 	var sideways = absi(delta.x * facing.y - delta.y * facing.x)
@@ -1249,11 +1254,18 @@ func _draw():
 func draw_map(canvas: Control):
 	var first = Vector2i(camera / CELL)
 	var last = Vector2i((camera + map_visible_size()) / CELL) + Vector2i.ONE
+	update_sight_overlay(first, last)
 	for y in range(maxi(0, first.y), mini(MAP.size(), last.y)):
 		for x in range(maxi(0, first.x), mini(MAP[0].length(), last.x)):
 			var p = Vector2i(x, y)
 			var rect = Rect2(map_point(p), Vector2.ONE * (CELL - 2))
 			canvas.draw_rect(rect, Color("4a5551") if blocks_sight(p) else (Color("354039") if is_indoors(p) else Color("23332f")))
+			var sight = int(sight_overlay_cells.get(p, 0))
+			if sight & 1:
+				canvas.draw_rect(rect, Color(0.40, 0.78, 0.96, 0.10))
+			if sight & 2:
+				canvas.draw_rect(rect, Color(0.96, 0.40, 0.29, 0.12))
+				canvas.draw_rect(rect.grow(-1), Color(0.96, 0.40, 0.29, 0.20), false, 1)
 			if tile_at(p) == "=":
 				canvas.draw_rect(Rect2(rect.position + Vector2(3, 9), Vector2(28, 16)), Color("85936d"))
 				for stripe in range(4):
@@ -1293,6 +1305,35 @@ func draw_map(canvas: Control):
 	canvas.draw_circle(player_draw_pos * CELL - camera + Vector2(17, 17), 4, Color("eef4df"))
 
 	draw_cover_edges(canvas, player, Color("a0dcd6"), player_draw_pos)
+	# Small color key stays inside the map viewport at every zoom level.
+	var legend_origin = Vector2(6, 6) / map_zoom
+	canvas.draw_rect(Rect2(legend_origin, Vector2(151, 19) / map_zoom), Color(0.04, 0.08, 0.08, 0.78))
+	canvas.draw_string(canvas.get_theme_default_font(), legend_origin + Vector2(5, 14) / map_zoom, "YOU", HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(1, roundi(12 / map_zoom)), Color("87c6e3"))
+	canvas.draw_string(canvas.get_theme_default_font(), legend_origin + Vector2(49, 14) / map_zoom, "ENEMY SIGHT", HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(1, roundi(12 / map_zoom)), Color("e9937b"))
+
+func update_sight_overlay(first: Vector2i, last: Vector2i):
+	var key: Array = [player, combat, motion_epoch, first, last]
+	var guards: Array = []
+	for e in enemies:
+		key.append([e.pos, e.hp > 0, e.get("facing", Vector2i.LEFT), e.get("alerted", false)])
+		if visible(e):
+			guards.append(e)
+	if key == sight_overlay_key:
+		return
+	sight_overlay_key = key
+	sight_overlay_cells.clear()
+	for y in range(maxi(0, first.y), mini(MAP.size(), last.y)):
+		for x in range(maxi(0, first.x), mini(MAP[0].length(), last.x)):
+			var p = Vector2i(x, y)
+			if blocks_sight(p):
+				continue
+			var flags = 1 if player_can_see(p) else 0
+			for guard in guards:
+				if enemy_can_see_tile(guard, p):
+					flags |= 2
+					break
+			if flags:
+				sight_overlay_cells[p] = flags
 
 func draw_cover_edges(canvas: Control, p: Vector2i, color: Color, display: Vector2):
 	var center = display * CELL - camera + Vector2(17, 17)

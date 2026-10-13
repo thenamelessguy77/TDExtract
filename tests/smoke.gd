@@ -99,6 +99,7 @@ func run():
 	assert(test_weapons(game), "Weapon checks must complete")
 	assert(test_gear_loot_and_persistence(game), "Typed ammo and persistent gun checks must complete")
 	assert(await test_bleeding_and_bandages(game), "Bleeding and bandage checks must complete")
+	assert(test_sight_overlays(game), "Sight overlay checks must complete")
 	assert(test_half_cover_hiding(game), "Half-cover concealment checks must complete")
 	assert(test_enemy_ai(game), "Enemy AI checks must complete")
 	assert(test_sight_and_zoom(game), "Sight and zoom checks must complete")
@@ -1415,4 +1416,47 @@ func test_half_cover_hiding(game) -> bool:
 	game.MAP = original_map
 	game.new_raid()
 	print("PASS: automatic half-cover concealment, directional flanking, adjacency, player visibility, investigation, alerted/combat visibility and defensive cover")
+	return true
+
+func test_sight_overlays(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	var original_map = game.MAP.duplicate()
+	game.MAP.clear()
+	for y in range(15):
+		game.MAP.append("...............")
+	game.player = Vector2i(2, 2)
+	var guard = {"pos": Vector2i(4, 2), "hp": 60, "facing": Vector2i.DOWN}
+	game.enemies.append(guard)
+	game.update_sight_overlay(Vector2i.ZERO, Vector2i(15, 15))
+	assert(game.sight_overlay_cells.get(Vector2i(4, 4), 0) == 3, "Player and guard sight overlap")
+	assert(game.sight_overlay_cells.get(Vector2i(4, 1), 0) == 1, "Guard rear remains blue only")
+	assert(not game.sight_overlay_cells.has(Vector2i(14, 14)), "Sight does not extend beyond ten tiles")
+	guard.facing = Vector2i.UP
+	game.update_sight_overlay(Vector2i.ZERO, Vector2i(15, 15))
+	assert(game.sight_overlay_cells.get(Vector2i(4, 4), 0) == 1 and game.sight_overlay_cells.get(Vector2i(4, 1), 0) == 3, "Facing change refreshes cached sight")
+	guard.facing = Vector2i.DOWN
+	game.set_tile(Vector2i(4, 3), "=")
+	game.sight_overlay_key.clear()
+	game.update_sight_overlay(Vector2i.ZERO, Vector2i(15, 15))
+	assert(game.sight_overlay_cells.get(Vector2i(4, 4), 0) == 1, "Half cover hides protected tiles before combat")
+	game.combat = true
+	game.update_sight_overlay(Vector2i.ZERO, Vector2i(15, 15))
+	assert(game.sight_overlay_cells.get(Vector2i(4, 4), 0) == 3, "Combat sight matches normal view over half cover")
+	for x in range(3, 6):
+		game.set_tile(Vector2i(x, 3), "#")
+	game.sight_overlay_key.clear()
+	game.update_sight_overlay(Vector2i.ZERO, Vector2i(15, 15))
+	assert((int(game.sight_overlay_cells.get(Vector2i(4, 4), 0)) & 2) == 0, "Full walls block enemy sight overlay")
+	guard.hp = 0
+	game.update_sight_overlay(Vector2i.ZERO, Vector2i(15, 15))
+	for flags in game.sight_overlay_cells.values():
+		assert((flags & 2) == 0, "Dead enemies have no cone")
+	game.enemies.append({"pos": Vector2i(12, 12), "hp": 60, "facing": Vector2i.UP})
+	game.update_sight_overlay(Vector2i.ZERO, Vector2i(15, 15))
+	for flags in game.sight_overlay_cells.values():
+		assert((flags & 2) == 0, "Unseen enemies do not reveal their cones")
+	game.MAP = original_map
+	game.new_raid()
+	print("PASS: blue player sight, coral visible-guard cones, overlap, facing/cache updates, ten-tile range, walls, half-cover concealment/combat, no dead or unseen guard cones")
 	return true
