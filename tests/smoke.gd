@@ -80,6 +80,7 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_spotting_visibility(game), "Spotting visibility checks must complete")
 	assert(test_automatic_combat_end(game), "Automatic combat exit checks must complete")
 	assert(test_corner_peeking(game), "Peeking checks must complete")
 	assert(test_full_wall_corners(game), "Corner-cover checks must complete")
@@ -96,7 +97,7 @@ func run():
 func test_ammo(game) -> bool:
 	game.new_raid()
 	assert(game.ammo == 7 and game.reserve == 24)
-	assert(game.ammo_status.text == "GUN 7/7  •  RESERVE 24  •  TOTAL 31")
+	assert(game.ammo_status.text == "GUN 7/7  •  AMMO 24  •  TOTAL 31")
 	game.enemies.clear()
 	game.player = Vector2i(1, 1)
 	game.exfil = Vector2i(10, 10)
@@ -147,7 +148,7 @@ func test_ammo(game) -> bool:
 	game.selected = 0
 	game.shoot()
 	assert(game.ammo == 0 and game.reserve == 7 and game.ap == 1)
-	assert(game.ammo_status.text == "GUN 0/7  •  RESERVE 7  •  TOTAL 7")
+	assert(game.ammo_status.text == "GUN 0/7  •  AMMO 7  •  TOTAL 7")
 	game.shoot()
 	assert(game.ap == 1, "An empty gun cannot fire reserve rounds")
 	game.finished = true
@@ -607,4 +608,34 @@ func test_automatic_combat_end(game) -> bool:
 	game.enter_combat()
 	assert(game.ap == 7, "Banked AP above four is retained")
 	print("PASS: automatic exit after final kill, distant unengaged patrols ignored, surviving threats retained, no extra enemy turn/tick/AP grant, body loot and Aim preserved, fresh engagement AP")
+	return true
+
+func test_spotting_visibility(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	game.player = Vector2i(1, 1)
+	var guard = {"pos": Vector2i(7, 1), "hp": 60, "facing": Vector2i.LEFT}
+	game.enemies.append(guard)
+	game.camera = Vector2(432, 504)
+	assert(game.enemy_can_see_player(guard))
+	game.world_tick()
+	assert(game.combat and guard.pos == Vector2i(7, 1) and guard.facing == Vector2i.LEFT)
+	assert(game.visible(guard) and game.selected == 0 and game.can_fire())
+	var viewport = Rect2(game.camera, game.MAP_VIEW_SIZE)
+	assert(viewport.has_point(Vector2(game.player) * game.CELL + Vector2(18, 18)))
+	assert(viewport.has_point(Vector2(guard.pos) * game.CELL + Vector2(18, 18)), "Spotter must be in the scrolled view")
+	game.camera = Vector2(432, 504)
+	game.ap = 0
+	game.enemy_turn()
+	assert(game.visible(guard) and game.selected == 0)
+	assert(Rect2(game.camera, game.MAP_VIEW_SIZE).has_point(Vector2(guard.pos) * game.CELL + Vector2(18, 18)))
+	# Move-to contact must stop with the detector still drawable and selectable.
+	game.new_raid()
+	game.enemies.clear()
+	game.player = Vector2i(1, 1)
+	game.enemies.append({"pos": Vector2i(7, 1), "hp": 60, "facing": Vector2i.LEFT})
+	game.move_to(Vector2i(5, 1))
+	assert(game.combat and game.player == Vector2i(2, 1) and game.visible(game.enemies[0]))
+	assert(game.selected == 0)
+	print("PASS: ammo HUD wording, reciprocal spotting, detectors hold position, automatic targeting and camera framing, contact interrupts movement, threats framed after enemy turn")
 	return true

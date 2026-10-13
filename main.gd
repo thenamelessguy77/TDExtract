@@ -418,21 +418,30 @@ func patrol_step(e: Dictionary):
 		e.pos += direction
 
 func world_tick():
-	var spotted = false
+	var spotted_guards: Array[Dictionary] = []
 	for e in enemies:
 		if enemy_can_see_player(e):
 			spot_player(e)
-			spotted = true
+			spotted_guards.append(e)
 	for e in enemies:
-		if e.hp > 0:
+		# A guard that sees the operator reacts in place instead of wandering away.
+		if e.hp > 0 and not spotted_guards.has(e):
 			patrol_step(e)
 	for e in enemies:
 		if enemy_can_see_player(e):
 			spot_player(e)
-			spotted = true
-	if spotted:
+			if not spotted_guards.has(e):
+				spotted_guards.append(e)
+	if not spotted_guards.is_empty():
 		enter_combat()
-		message = "Enemy patrol spotted you. Combat begins."
+		focus_contact(spotted_guards[0])
+		message = "Enemy patrol spotted you. Highlighted the guard; choose an attack."
+
+func focus_contact(e: Dictionary):
+	selected = enemies.find(e)
+	camera = (Vector2(player) + Vector2(e.pos)) * CELL / 2 + Vector2(18, 18) - MAP_VIEW_SIZE / 2
+	clamp_camera()
+	map_view.queue_redraw()
 
 func choose_shot(mode: int):
 	if mode < 0 or mode >= SHOT_PROFILES.size():
@@ -539,6 +548,11 @@ func enemy_turn():
 		for e in enemies:
 			e.alerted = false
 		message = "Contact broken. Exploration resumes; patrols advance when you move."
+	if combat and not finished:
+		for e in enemies:
+			if enemy_can_see_player(e):
+				focus_contact(e)
+				break
 	refresh()
 
 func extract():
@@ -559,8 +573,10 @@ func extract():
 func refresh():
 	if not is_instance_valid(status):
 		return
+	if selected >= 0 and (selected >= enemies.size() or not visible(enemies[selected])):
+		selected = -1
 	status.text = "HP %d • LOOT %d • BANK %d • OBJ %s" % [hp, cargo, stash, "OK" if objective_collected else "--"]
-	ammo_status.text = "GUN %d/%d  •  RESERVE %d  •  TOTAL %d" % [ammo, MAGAZINE_CAPACITY, reserve, ammo + reserve]
+	ammo_status.text = "GUN %d/%d  •  AMMO %d  •  TOTAL %d" % [ammo, MAGAZINE_CAPACITY, reserve, ammo + reserve]
 	reload_button.tooltip_text = "Reload: 2 AP" if combat else "Reload: 1 world tick"
 	intel.text = ("COMBAT • %d AP (max 8)" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
 	if aiming:
