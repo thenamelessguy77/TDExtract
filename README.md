@@ -9,14 +9,14 @@ Open `project.godot` in Godot 4.6.3 and press F6/F5, or run `godot --path .`.
 
 - Drag with touch or the left mouse button to pan the map without advancing time. Mouse wheel scrolls vertically; Shift + wheel scrolls horizontally. Center returns to the operator; Objective only centers on a pickup currently in sight. After collecting it, the button becomes Exfil and locates extraction from anywhere.
 - Tap/click a reachable tile to travel along its shortest path. Every tile costs one world tick. The world stays still while you decide.
-- Blue is your operator, gold is supply crates, green is extraction. Each crate randomly contains ammo (seven reserve rounds), health (up to 25 HP), or both, plus one supply. Crates are shown only within six tiles and clear line of sight. Unopened crates all look identical; contents are revealed only on pickup. Enemies appear within six tiles and line of sight. They detect you only inside a 90-degree forward cone in their arrow direction; patrol steps turn them toward their movement.
-- Contact interrupts movement immediately. A guard that has spotted you holds position, becomes selected, and the map frames both you and that guard. Each combat turn starts with four action points; unused AP is discarded when you end your turn: moving one tile or firing a single shot costs one AP; burst costs two AP. Tap a hostile to select it and see its hit chance; press Fire to commit the shot. The gun holds seven rounds; you start with 24 reserve rounds. The HUD shows Gun (loaded rounds), Ammo (carried spare rounds), and Total (both combined). Reloading costs one world tick during exploration, or two AP in combat. A partial reload uses only the rounds you have; a full gun or empty reserve spends no time.
+- Blue is your operator, gold is supply crates, green is extraction. Each crate randomly contains ammo (seven reserve rounds), health (up to 25 HP), ammo and health together, a bandage, or all three, plus one supply. Every raid has at least one crate containing a bandage. Crates are shown only within six tiles and clear line of sight. Unopened crates all look identical; contents are revealed only on pickup. Enemies appear within six tiles and line of sight. They detect you only inside a 90-degree forward cone in their arrow direction; patrol steps turn them toward their movement.
+- Contact interrupts movement immediately. A guard that has spotted you holds position, becomes selected, and the map frames both you and that guard. Each combat turn starts with four action points; unused AP is discarded when you end your turn: moving one tile costs one AP; firing costs one or two AP depending on the weapon; burst costs two AP. Tap a hostile to select it and see its hit chance; press Fire to commit the shot. The pistol holds seven rounds; other weapons have their own magazine sizes. You start with a full magazine and 24 spare rounds. The HUD shows Gun (loaded rounds), Ammo (carried spare rounds), and Total (both combined). Reloading costs one world tick during exploration, or two AP in combat. A partial reload uses only the rounds you have; a full gun or empty reserve spends no time.
 - End Turn grants living enemies two actions each. Solid gray walls block movement and line of sight. Striped waist-high barriers block movement but allow vision and fire. A floor-tile gap separates every low barrier from full walls, including diagonally. Standing directly beside a low barrier automatically grants cover against shots coming from that side: incoming hit odds lose 25 percentage points. Standing beside an exposed full-wall corner also automatically grants the same 25-point defensive bonus against incoming shots around that corner, with automatic peeking from the adjoining open tile. Players and enemies can see and fire around the corner without moving or spending extra AP; peeking also lets enemies fire back at the exposed position. Flat wall faces and obstructed openings still block vision and shots, and firing around your own corner carries no accuracy penalty. Side/rear attacks flank cover. Shooting over your own cover never reduces your accuracy; only the target’s cover and range affect the shot. Eliminating the last engaged enemy immediately resumes exploration without an extra enemy turn. Distant unengaged patrols do not keep combat active. A fresh engagement starts with four AP. Break contact to resume exploration.
 - First collect the purple objective, which spawns at least eight Manhattan tiles from your insertion on a reachable floor tile inside a building. It is shown only within six tiles and line of sight. Extraction stays hidden until the pickup, then is revealed globally. Then stand on the extraction tile and press Extract to bank your cargo. Death loses raid cargo. Banked supplies persist locally (`user://stash.json`); a new raid resets health and ammunition.
 
-Defeated enemies leave an X-shaped body. Stand on or beside it and tap it or press Search. Searching costs one world tick in exploration or one AP and one tick in combat, grants hidden randomized ammo/health loot, and can only be done once. In exploration, patrols advance during the search.
+Defeated enemies leave an X-shaped body. Stand on or beside it and tap it or press Search. Searching costs one world tick in exploration or one AP and one tick in combat, grants hidden randomized ammo/health/bandage loot, and can only be done once. In exploration, patrols advance during the search.
 
-This is an initial mechanics prototype, with abstract tactical symbols rather than final pixel art. Equipment, weapon selection, armor, sound, multiple maps, and a full stash/loadout economy are future work. Enemy AI uses simple patrols and greedy pursuit. No real-time simulation or procedural map generation.
+This is an initial mechanics prototype, with abstract tactical symbols rather than final pixel art. Armor, sound, multiple maps, weapon pickups, and a full stash/loadout economy are future work. Player weapon choice is currently a pre-raid selector; enemies retain their existing attacks. Enemy AI uses simple patrols and greedy pursuit. No real-time simulation or procedural map generation.
 
 ## Web testing
 
@@ -59,12 +59,24 @@ To host a playable browser build, set **Settings → Pages → Source → GitHub
 
 ## Combat options
 
+Select a weapon using the top-left dropdown before your first action. The choice locks for the raid once you move, enter combat, reload, search, or bandage; New Raid unlocks it again and keeps the selected weapon. Ammo pickups currently replenish a shared spare-round pool for the equipped weapon.
+
 Select Body, Head, or Burst, then tap an enemy and Fire. The displayed hit chance includes range, target cover, shot mode, and Aim.
 
-| Attack | Damage per hit | Accuracy adjustment | AP | Loaded ammo |
-| --- | --- | --- | --- | --- |
-| Body | 35 | unchanged | 1 | 1 |
-| Head | 60 | −20 points | 1 | 1 |
-| Burst | 35 | −15 points per round | 2 | 2–3 |
+| Weapon | Magazine | Body damage | Body/Head AP | Range (tiles) | Accuracy before cover/Aim | Burst |
+| --- | --- | --- | --- | --- | --- | --- |
+| Pistol | 7 | 35 | 1 | 6 | 95 − 8 per tile | Yes |
+| Rifle | 20 | 40 | 1 | 6 | 95 − 6 per tile | Yes |
+| Shotgun | 6 | 55 | 2 | 4 | 105 − 15 per tile | No |
+| Sniper | 5 | 65 | 2 | 6 | 95 − 3 per tile | No |
+| SMG | 25 | 24 | 1 | 6 | 100 − 10 per tile | Yes |
+
+Body uses the weapon's base damage and accuracy. Head deals approximately 1.71× damage with −20 accuracy points. Burst uses base damage per round, −15 accuracy points per round, and costs two AP. Pistol burst represents rapid successive shots. Shotgun is a single abstract close-range hit, not separately simulated pellets. Sniper retains the current six-tile sight limit, with better accuracy at longer visible distances. These are initial tuning values.
 
 Burst independently rolls each round, requires at least two loaded rounds, and fires two if only two remain. Aim costs one AP and adds 30 accuracy points (maximum 95%) to every attack, including all burst rounds. It stays active through firing and ending turns, and only moving or taking damage cancels it. Repeated Aim does not stack. Ending a turn without acting still lets enemies act; unused AP does not carry over. Enemies still get two actions each.
+
+## Bleeding and bandages
+
+Each damaging hit has a 15% chance to start bleeding. Misses cannot cause bleeding, and the status does not stack. Bleeding removes three HP per exploration tick (including each tile moved, reloading, and body searches), or once at the end of the enemy phase in combat. Combat AP actions do not each cause additional bleeding damage. Nothing advances while idle. Bleeding damage cancels Aim and can kill the operator; travel stops immediately on death.
+
+You start each raid with one bandage. Crates and searchable bodies can provide more; their contents remain hidden until looted. The Bandage button displays the carried count and is enabled only when bleeding, alive, and able to pay the action cost. Using one stops bleeding, restores no HP, and costs one world tick outside combat or one AP in combat. Outside combat, patrols still advance during treatment. Healing pickups restore HP but never stop bleeding. A new raid resets bleeding and bandages.

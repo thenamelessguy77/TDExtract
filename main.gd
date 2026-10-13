@@ -9,23 +9,38 @@ const AP_PER_TURN = 4
 const AIM_BONUS = 30
 const MAP_VIEW_SIZE = Vector2(432, 360)
 const SHOT_PROFILES = [
-	{"name": "BODY", "damage": 35, "accuracy": 0, "ap": 1},
-	{"name": "HEAD", "damage": 60, "accuracy": -20, "ap": 1},
-	{"name": "BURST", "damage": 35, "accuracy": -15, "ap": 2}
+	{"name": "BODY", "accuracy": 0},
+	{"name": "HEAD", "accuracy": -20},
+	{"name": "BURST", "accuracy": -15}
 ]
+const WEAPONS = [
+	{"name": "PISTOL", "magazine": 7, "damage": 35, "accuracy": 95, "falloff": 8, "range": 6, "ap": 1, "burst": true},
+	{"name": "RIFLE", "magazine": 20, "damage": 40, "accuracy": 95, "falloff": 6, "range": 6, "ap": 1, "burst": true},
+	{"name": "SHOTGUN", "magazine": 6, "damage": 55, "accuracy": 105, "falloff": 15, "range": 4, "ap": 2, "burst": false},
+	{"name": "SNIPER", "magazine": 5, "damage": 65, "accuracy": 95, "falloff": 3, "range": 6, "ap": 2, "burst": false},
+	{"name": "SMG", "magazine": 25, "damage": 24, "accuracy": 100, "falloff": 10, "range": 6, "ap": 1, "burst": true}
+]
+const BLEED_CHANCE = 15
+const BLEED_DAMAGE = 3
 const MAX_HEALTH = 100
 const CRATE_HEALTH = 25
 const COVER_PENALTY = 25
 const RAID_LOOT_COUNT = 4
 const OBJECTIVE_MIN_DISTANCE = 8
 const RAID_ENEMY_COUNT = 6
-const MAGAZINE_CAPACITY = 7
 const CRATE_AMMO = 7
 const COMBAT_RELOAD_AP = 2
 const CELL = 36.0
 const ORIGIN = Vector2(24, 164)
 const DIRS = [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
 var rng = RandomNumberGenerator.new()
+var bleed_rng = RandomNumberGenerator.new()
+var weapon_id = 0
+var loadout_locked = false
+var bleeding = false
+var bandages = 1
+var weapon_select: OptionButton
+var bandage_button: Button
 var player = Vector2i.ZERO
 var exfil = Vector2i.ZERO
 var enemies: Array[Dictionary] = []
@@ -34,7 +49,7 @@ var objective = Vector2i.ZERO
 var objective_collected = false
 var hp = MAX_HEALTH
 var ap = AP_PER_TURN
-var ammo = MAGAZINE_CAPACITY
+var ammo = 7
 var reserve = 24
 var cargo = 0
 var stash = 0
@@ -69,6 +84,7 @@ var pointer_dragged = false
 func _ready():
 	build_map()
 	rng.randomize()
+	bleed_rng.randomize()
 	stash = int(load_stash())
 	make_ui()
 	new_raid()
@@ -108,8 +124,16 @@ func make_ui():
 	map_view.clip_contents = true
 	map_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(map_view)
-	title = make_label(Vector2(24, 20), Vector2(280, 32), 22, Color("e7efcf"))
-	title.text = "TD / EXTRACTION"
+	title = make_label(Vector2(170, 20), Vector2(140, 32), 16, Color("e7efcf"))
+	title.text = "TD / EXTRACT"
+	weapon_select = OptionButton.new()
+	weapon_select.position = Vector2(24, 20)
+	weapon_select.size = Vector2(136, 36)
+	weapon_select.add_theme_font_size_override("font_size", 14)
+	for weapon in WEAPONS:
+		weapon_select.add_item(weapon.name)
+	weapon_select.item_selected.connect(choose_weapon)
+	add_child(weapon_select)
 	status = make_label(Vector2(24, 62), Vector2(432, 24), 17, Color("adc5af"))
 	ammo_status = make_label(Vector2(24, 86), Vector2(432, 24), 16, Color("adc5af"))
 	intel = make_label(Vector2(24, 116), Vector2(432, 42), 14, Color("e0b969"))
@@ -122,9 +146,12 @@ func make_ui():
 		button.toggle_mode = true
 		shot_buttons.append(button)
 	aim_button = make_button("AIM • 1 AP", Vector2(24, 588), aim_weapon)
-	aim_button.size = Vector2(136, 44)
+	aim_button.size = Vector2(99, 44)
 	aim_button.add_theme_font_size_override("font_size", 14)
-	shot_info = make_label(Vector2(135, 588), Vector2(321, 48), 14, Color("e0b969"))
+	bandage_button = make_button("BANDAGE (1)", Vector2(135, 588), use_bandage)
+	bandage_button.size = Vector2(99, 44)
+	bandage_button.add_theme_font_size_override("font_size", 12)
+	shot_info = make_label(Vector2(246, 588), Vector2(210, 48), 12, Color("e0b969"))
 	fire_button = make_button("FIRE", Vector2(24, 700), shoot)
 	reload_button = make_button("RELOAD", Vector2(135, 700), reload_weapon)
 	end_button = make_button("END TURN", Vector2(246, 700), enemy_turn)
@@ -210,19 +237,24 @@ func new_raid():
 			outdoor.append(tile)
 	for i in range(RAID_LOOT_COUNT):
 		var pool = indoor if i < RAID_LOOT_COUNT - 1 else outdoor
-		loot.append({"pos": pool.pop_back(), "kind": rng.randi_range(0, 2)})
+		loot.append({"pos": pool.pop_back(), "kind": rng.randi_range(0, 4)})
+	# Every raid has a hidden source of bandages, with randomized placement.
+	loot[rng.randi_range(0, loot.size() - 1)].kind = rng.randi_range(3, 4)
 	hp = MAX_HEALTH
+	bleeding = false
+	bandages = 1
+	loadout_locked = false
 	ap = AP_PER_TURN
 	shot_mode = 0
 	aiming = false
-	ammo = MAGAZINE_CAPACITY
+	ammo = weapon_profile().magazine
 	reserve = 24
 	cargo = 0
 	ticks = 0
 	combat = false
 	finished = false
 	selected = -1
-	message = "Search buildings for the hidden objective, then extract. Search buildings for crates. Drag to explore the map; tap to move."
+	message = "Choose a weapon before acting. Find the indoor objective, then extract. You carry one bandage; crates may contain more."
 	center_player()
 	refresh()
 
@@ -362,9 +394,12 @@ func move_to(target: Vector2i):
 	if path.is_empty():
 		message = "Choose a reachable, unoccupied tile."
 	for step in path:
+		if finished:
+			break
 		if combat and ap <= 0:
 			message = "No action points. End your turn."
 			break
+		loadout_locked = true
 		player = step
 		aiming = false
 		ticks += 1
@@ -417,6 +452,10 @@ func patrol_step(e: Dictionary):
 		e.pos += direction
 
 func world_tick():
+	loadout_locked = true
+	advance_bleeding()
+	if finished:
+		return
 	var spotted_guards: Array[Dictionary] = []
 	for e in enemies:
 		if enemy_can_see_player(e):
@@ -443,13 +482,15 @@ func focus_contact(e: Dictionary):
 	map_view.queue_redraw()
 
 func choose_shot(mode: int):
-	if mode < 0 or mode >= SHOT_PROFILES.size():
+	if mode < 0 or mode >= SHOT_PROFILES.size() or (mode == 2 and not weapon_profile().burst):
 		return
 	shot_mode = mode
 	refresh()
 
 func shot_chance(target: Vector2i) -> int:
-	return clampi(hit_chance(player, target) + SHOT_PROFILES[shot_mode].accuracy + (AIM_BONUS if aiming else 0), 5, 95)
+	var weapon = weapon_profile()
+	var base = clampi(weapon.accuracy - distance(player, target) * weapon.falloff - (COVER_PENALTY if cover_at(target, player) else 0), 15, 95)
+	return clampi(base + SHOT_PROFILES[shot_mode].accuracy + (AIM_BONUS if aiming else 0), 5, 95)
 
 func aim_weapon():
 	if finished or not combat or ap < 1 or aiming:
@@ -460,7 +501,7 @@ func aim_weapon():
 	refresh()
 
 func can_fire() -> bool:
-	return not finished and combat and ap >= SHOT_PROFILES[shot_mode].ap and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected])
+	return not finished and combat and ap >= attack_ap() and (shot_mode != 2 or weapon_profile().burst) and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected]) and distance(player, enemies[selected].pos) <= weapon_profile().range
 
 func shoot():
 	if not can_fire():
@@ -470,16 +511,17 @@ func shoot():
 	var chance = shot_chance(enemy.pos)
 	var rounds = mini(ammo, rng.randi_range(2, 3)) if shot_mode == 2 else 1
 	spot_player(enemy)
-	ap -= profile.ap
+	loadout_locked = true
+	ap -= attack_ap()
 	ammo -= rounds
 	var hits = 0
 	for round_index in range(rounds):
 		if rng.randi_range(1, 100) <= chance:
-			enemy.hp -= profile.damage
+			enemy.hp -= attack_damage()
 			hits += 1
-	message = "%s: %d/%d hits, %d damage." % [profile.name, hits, rounds, hits * profile.damage]
+	message = "%s: %d/%d hits, %d damage." % [profile.name, hits, rounds, hits * attack_damage()]
 	if enemy.hp <= 0:
-		enemy.loot_kind = rng.randi_range(0, 2)
+		enemy.loot_kind = rng.randi_range(0, 4)
 		enemy.searched = false
 		selected = -1
 		message += " Hostile down."
@@ -487,17 +529,73 @@ func shoot():
 	refresh()
 
 func take_damage(amount: int):
-	if amount > 0:
+	if amount > 0 and not finished:
+		loadout_locked = true
 		hp = maxi(0, hp - amount)
 		aiming = false
+		if hp > 0 and not bleeding and bleed_rng.randi_range(1, 100) <= BLEED_CHANCE:
+			bleeding = true
+		check_death()
+
+func weapon_profile() -> Dictionary:
+	return WEAPONS[weapon_id]
+
+func attack_ap() -> int:
+	return 2 if shot_mode == 2 else int(weapon_profile().ap)
+
+func attack_damage() -> int:
+	return roundi(weapon_profile().damage * 60.0 / 35.0) if shot_mode == 1 else int(weapon_profile().damage)
+
+func choose_weapon(index: int):
+	if finished or loadout_locked or combat or index < 0 or index >= WEAPONS.size():
+		return
+	weapon_id = index
+	ammo = weapon_profile().magazine
+	reserve = 24
+	shot_mode = 0
+	aiming = false
+	message = "%s: %d damage, %d-round magazine, %d-tile range, %d AP per shot.%s" % [weapon_profile().name, attack_damage(), ammo, weapon_profile().range, attack_ap(), " Burst available." if weapon_profile().burst else " Single shots only."]
+	refresh()
+
+func check_death():
+	if hp <= 0:
+		hp = 0
+		finished = true
+		message = "Operator lost. Raid cargo lost. Your banked supplies are safe. Start a new raid."
+
+func advance_bleeding():
+	if finished or not bleeding:
+		return
+	hp = maxi(0, hp - BLEED_DAMAGE)
+	aiming = false
+	message += " Bleeding: -%d HP." % BLEED_DAMAGE
+	check_death()
+
+func can_bandage() -> bool:
+	return not finished and bleeding and bandages > 0 and (not combat or ap >= 1)
+
+func use_bandage():
+	if not can_bandage():
+		return
+	loadout_locked = true
+	bandages -= 1
+	bleeding = false
+	message = "Bandaged. Bleeding stopped; no health restored."
+	if combat:
+		ap -= 1
+	else:
+		ticks += 1
+		world_tick()
+	refresh()
 
 func can_reload() -> bool:
-	return not finished and reserve > 0 and ammo < MAGAZINE_CAPACITY and (not combat or ap >= COMBAT_RELOAD_AP)
+	return not finished and reserve > 0 and ammo < weapon_profile().magazine and (not combat or ap >= COMBAT_RELOAD_AP)
 
 func reload_weapon():
 	if not can_reload():
 		return
-	var rounds = mini(MAGAZINE_CAPACITY - ammo, reserve)
+	loadout_locked = true
+	var rounds = mini(weapon_profile().magazine - ammo, reserve)
 	ammo += rounds
 	reserve -= rounds
 	if combat:
@@ -514,10 +612,14 @@ func enemy_turn():
 		return
 	var damage = 0
 	for e in enemies:
+		if finished:
+			break
 		if e.hp <= 0:
 			continue
 		# Each enemy has two actions: move one cell or fire once per action.
 		for action in range(2):
+			if finished:
+				break
 			if enemy_can_see_player(e):
 				spot_player(e)
 				if rng.randi_range(1, 100) <= hit_chance(e.pos, player):
@@ -537,6 +639,7 @@ func enemy_turn():
 	ap = AP_PER_TURN
 	ticks += 1
 	message = "Enemy turn: %d damage. Your turn." % damage
+	advance_bleeding()
 	if hp <= 0:
 		hp = 0
 		finished = true
@@ -575,25 +678,34 @@ func refresh():
 	if selected >= 0 and (selected >= enemies.size() or not visible(enemies[selected])):
 		selected = -1
 	status.text = "HP %d • LOOT %d • BANK %d • OBJ %s" % [hp, cargo, stash, "OK" if objective_collected else "--"]
-	ammo_status.text = "GUN %d/%d  •  AMMO %d  •  TOTAL %d" % [ammo, MAGAZINE_CAPACITY, reserve, ammo + reserve]
+	ammo_status.text = "GUN %d/%d  •  AMMO %d  •  TOTAL %d" % [ammo, weapon_profile().magazine, reserve, ammo + reserve]
 	reload_button.tooltip_text = "Reload: 2 AP" if combat else "Reload: 1 world tick"
+	intel.add_theme_color_override("font_color", Color("ef9585") if bleeding else Color("e0b969"))
 	intel.text = ("COMBAT • %d/4 AP" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
+	if bleeding:
+		intel.text += " • BLEED -%d" % BLEED_DAMAGE
 	if aiming:
 		intel.text += " • AIMED"
 	if adjacent_cover(player):
 		intel.text += "   •   COVER"
 	if selected >= 0 and visible(enemies[selected]):
-		intel.text += "\nTARGET %d HP • HIT %d%%%s" % [enemies[selected].hp, shot_chance(enemies[selected].pos), " • COVER" if cover_at(enemies[selected].pos, player) else ""]
+		intel.text += "\nTARGET %d HP • HIT %d%%%s" % [enemies[selected].hp, shot_chance(enemies[selected].pos), " • OUT OF RANGE" if distance(player, enemies[selected].pos) > weapon_profile().range else (" • COVER" if cover_at(enemies[selected].pos, player) else "")]
 	else:
 		intel.text += "\nPurple: objective • Green: exfil • Arrows: facing"
 	feed.text = message
 	var profile = SHOT_PROFILES[shot_mode]
-	shot_info.text = "%s • %d AP • %d damage%s" % [profile.name, profile.ap, profile.damage, "/round" if shot_mode == 2 else ""]
-	shot_info.text += "\nAim +30 • %s • %s" % ["2–3 ammo" if shot_mode == 2 else "1 ammo", "AIM READY" if aiming else "not aimed"]
+	shot_info.text = "%s • %d AP • %d dmg%s" % [profile.name, attack_ap(), attack_damage(), "/round" if shot_mode == 2 else ""]
+	shot_info.text += "\nRange %d • %s • Aim +30" % [weapon_profile().range, "2–3 ammo" if shot_mode == 2 else "1 ammo"]
 	for i in range(shot_buttons.size()):
 		shot_buttons[i].set_pressed_no_signal(i == shot_mode)
-		shot_buttons[i].tooltip_text = "%d damage, %+d accuracy points, %d AP" % [SHOT_PROFILES[i].damage, SHOT_PROFILES[i].accuracy, SHOT_PROFILES[i].ap]
-		shot_buttons[i].disabled = finished
+		shot_buttons[i].tooltip_text = "%d damage, %+d accuracy points, %d AP" % [roundi(weapon_profile().damage * 60.0 / 35.0) if i == 1 else weapon_profile().damage, SHOT_PROFILES[i].accuracy, 2 if i == 2 else weapon_profile().ap]
+		shot_buttons[i].disabled = finished or (i == 2 and not weapon_profile().burst)
+	weapon_select.select(weapon_id)
+	weapon_select.disabled = finished or loadout_locked or combat
+	weapon_select.tooltip_text = "Choose your weapon before your first action. Locked for the rest of this raid."
+	bandage_button.text = "BANDAGE (%d)" % bandages
+	bandage_button.disabled = not can_bandage()
+	bandage_button.tooltip_text = "Stop bleeding: 1 AP, no healing" if combat else "Stop bleeding: 1 world tick, no healing"
 	aim_button.disabled = finished or not combat or ap < 1 or aiming
 	fire_button.disabled = not can_fire()
 	reload_button.disabled = not can_reload()
@@ -721,11 +833,13 @@ func map_point(p: Vector2i) -> Vector2:
 
 func apply_loot(kind: int, source: String):
 	cargo += 1
-	var rounds = CRATE_AMMO if kind != 1 else 0
-	var healed = mini(CRATE_HEALTH, MAX_HEALTH - hp) if kind != 0 else 0
+	var rounds = CRATE_AMMO if kind in [0, 2, 4] else 0
+	var healed = mini(CRATE_HEALTH, MAX_HEALTH - hp) if kind in [1, 2, 4] else 0
 	reserve += rounds
 	hp += healed
-	message = "%s: +%d ammo, +%d HP, +1 supply." % [source, rounds, healed]
+	var dressings = 1 if kind in [3, 4] else 0
+	bandages += dressings
+	message = "%s: +%d ammo, +%d HP, +%d bandage, +1 supply." % [source, rounds, healed, dressings]
 
 func nearby_body() -> int:
 	for i in range(enemies.size()):
@@ -742,6 +856,7 @@ func search_body(index: int):
 	var body = enemies[index]
 	if body.hp > 0 or body.get("searched", false) or distance(player, body.pos) > 1:
 		return
+	loadout_locked = true
 	body.searched = true
 	apply_loot(int(body.get("loot_kind", 0)), "Body")
 	ticks += 1
@@ -787,6 +902,7 @@ func corner_cover_at(p: Vector2i, attacker: Vector2i) -> bool:
 	return false
 
 func enter_combat():
+	loadout_locked = true
 	if not combat:
 		ap = AP_PER_TURN
 	combat = true

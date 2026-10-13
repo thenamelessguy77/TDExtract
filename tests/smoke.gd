@@ -40,6 +40,7 @@ func run():
 	assert(game.ap == 0)
 	game.move_to(Vector2i(5, 1))
 	assert(game.player == Vector2i(4, 1))
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(game.ap == 4)
 	game.ap = 2
@@ -72,6 +73,7 @@ func run():
 	game.player = Vector2i(1, 1)
 	game.enemies.append({"pos": Vector2i(2, 1), "hp": 60})
 	game.rng.seed = 1
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(game.finished and game.hp == 0 and game.stash == bank)
 	for seed_value in range(100):
@@ -90,6 +92,8 @@ func run():
 	assert(test_objective_facing_loot(game), "New raid mechanics must complete")
 	assert(test_health_and_cover(game), "Health and cover checks must all complete")
 	assert(test_ammo(game), "Ammo checks must all complete")
+	assert(test_weapons(game), "Weapon checks must complete")
+	assert(await test_bleeding_and_bandages(game), "Bleeding and bandage checks must complete")
 	print("PASS: randomized placements, idle freeze, movement ticks, loot, contact interruption, AP, enemy turn, LOS, cover, range, shooting, reloading, extraction, death, 100 raid seeds")
 	game.queue_free()
 	quit(0)
@@ -226,6 +230,7 @@ func test_health_and_cover(game) -> bool:
 			break
 	assert(firing_seed >= 0)
 	game.rng.seed = firing_seed
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(game.hp == 76, "Enemy can fire twice over its own cover without an aim penalty")
 	assert(not game.walkable(Vector2i(3, 3)) and game.blocks_sight(Vector2i(3, 3)))
@@ -249,11 +254,11 @@ func test_objective_facing_loot(game) -> bool:
 		for e in game.enemies:
 			assert(game.DIRS.has(e.facing) and e.pos != game.objective)
 		for crate in game.loot:
-			assert(crate.pos != game.objective and crate.kind >= 0 and crate.kind <= 2)
+			assert(crate.pos != game.objective and crate.kind >= 0 and crate.kind <= 4)
 			loot_kinds[crate.kind] = true
 		game.enemies.clear()
 		assert(not game.path_to(game.objective).is_empty())
-	assert(objective_locations.size() > 1 and loot_kinds.size() == 3)
+	assert(objective_locations.size() > 1 and loot_kinds.size() == 5)
 	game.player = game.exfil
 	var bank = game.stash
 	game.extract()
@@ -404,13 +409,16 @@ func test_combat_options(game) -> bool:
 	game.player = Vector2i(1, 1)
 	game.combat = true
 	assert(game.ap == 4)
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(game.ap == 4)
 	game.combat = true
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(game.ap == 4, "Skipping a full turn must not accumulate AP")
 	game.combat = true
 	game.ap = 1
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(game.ap == 4, "Unused AP must be discarded at the next turn")
 	game.combat = true
@@ -428,6 +436,7 @@ func test_combat_options(game) -> bool:
 	game.aim_weapon()
 	assert(game.ap == 3, "Aim cannot stack or spend twice")
 	game.enemies.clear()
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(game.aiming and game.ap == 4, "Aim persists across turns when no hit lands")
 	game.combat = true
@@ -436,6 +445,7 @@ func test_combat_options(game) -> bool:
 	game.aim_weapon()
 	game.take_damage(0)
 	assert(game.aiming, "Misses must not cancel Aim")
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.take_damage(12)
 	assert(not game.aiming)
 	# Actual enemy-phase misses preserve Aim, while a real hit cancels it.
@@ -460,9 +470,11 @@ func test_combat_options(game) -> bool:
 	game.combat = true
 	game.hp = 100
 	game.rng.seed = miss_seed
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(game.aiming and game.hp == 100)
 	game.rng.seed = hit_seed
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(not game.aiming and game.hp == 76)
 
@@ -626,6 +638,7 @@ func test_spotting_visibility(game) -> bool:
 	assert(viewport.has_point(Vector2(guard.pos) * game.CELL + Vector2(18, 18)), "Spotter must be in the scrolled view")
 	game.camera = Vector2(432, 504)
 	game.ap = 0
+	game.bleed_rng.seed = safe_bleed_seed()
 	game.enemy_turn()
 	assert(game.visible(guard) and game.selected == 0)
 	assert(Rect2(game.camera, game.MAP_VIEW_SIZE).has_point(Vector2(guard.pos) * game.CELL + Vector2(18, 18)))
@@ -638,4 +651,199 @@ func test_spotting_visibility(game) -> bool:
 	assert(game.combat and game.player == Vector2i(2, 1) and game.visible(game.enemies[0]))
 	assert(game.selected == 0)
 	print("PASS: ammo HUD wording, reciprocal spotting, detectors hold position, automatic targeting and camera framing, contact interrupts movement, threats framed after enemy turn")
+	return true
+
+func safe_bleed_seed() -> int:
+	var rolls = RandomNumberGenerator.new()
+	for candidate in range(1000):
+		rolls.seed = candidate
+		var safe = true
+		for i in range(8):
+			if rolls.randi_range(1, 100) <= 15:
+				safe = false
+		if safe:
+			return candidate
+	assert(false, "A deterministic non-bleeding seed is required")
+	return -1
+
+func test_weapons(game) -> bool:
+	var rolls = RandomNumberGenerator.new()
+	var hit_seed = -1
+	for candidate in range(1000):
+		rolls.seed = candidate
+		if rolls.randi_range(1, 100) <= 5:
+			hit_seed = candidate
+			break
+	assert(hit_seed >= 0)
+	var magazines = [7, 20, 6, 5, 25]
+	var damage = [35, 40, 55, 65, 24]
+	var shot_cost = [1, 1, 2, 2, 1]
+	var odds = [71, 77, 60, 86, 70]
+	for weapon in range(5):
+		game.new_raid()
+		game.weapon_select.item_selected.emit(weapon)
+		assert(game.weapon_id == weapon and game.ammo == magazines[weapon] and game.reserve == 24)
+		assert(game.ticks == 0 and game.ap == 4 and not game.weapon_select.disabled)
+		game.enemies.clear()
+		game.loot.clear()
+		game.player = Vector2i(1, 1)
+		game.enemies.append({"pos": Vector2i(4, 1), "hp": 1000, "facing": Vector2i.RIGHT})
+		game.combat = true
+		game.selected = 0
+		assert(game.shot_chance(Vector2i(4, 1)) == odds[weapon], "Weapons must have distinct range/accuracy curves")
+		for mode in range(2):
+			game.choose_shot(mode)
+			game.ap = 4
+			game.rng.seed = hit_seed
+			var old_hp = game.enemies[0].hp
+			var old_ammo = game.ammo
+			assert(game.can_fire())
+			game.shoot()
+			var expected_damage = roundi(damage[weapon] * 60.0 / 35.0) if mode == 1 else damage[weapon]
+			assert(game.enemies[0].hp == old_hp - expected_damage)
+			assert(game.ap == 4 - shot_cost[weapon] and game.ammo == old_ammo - 1)
+		game.ap = shot_cost[weapon] - 1
+		assert(not game.can_fire(), "Insufficient AP must block weapon-specific attacks")
+		game.choose_shot(2)
+		if weapon in [2, 3]:
+			assert(game.shot_mode == 1 and game.shot_buttons[2].disabled, "Shotgun/sniper cannot burst")
+		else:
+			assert(game.shot_mode == 2 and not game.shot_buttons[2].disabled)
+			game.ap = 4
+			game.ammo = 2
+			game.shoot()
+			assert(game.ammo == 0 and game.ap == 2, "Supported bursts consume actual rounds and two AP")
+		game.choose_shot(0)
+		game.ap = 4
+		game.ammo = 1
+		game.enemies[0].pos = Vector2i(6, 1)
+		assert(game.can_fire() == (weapon != 2), "Shotgun range must limit shooting without hiding the target")
+		game.ammo = 0
+		game.reserve = 3
+		game.reload_weapon()
+		assert(game.ammo == 3 and game.reserve == 0 and game.ap == 2)
+		game.combat = false
+		game.reserve = 100
+		game.reload_weapon()
+		assert(game.ammo == magazines[weapon] and game.reserve == 103 - magazines[weapon])
+		game.choose_weapon((weapon + 1) % 5)
+		assert(game.weapon_id == weapon, "Loadout must stay locked after acting")
+		game.new_raid()
+		assert(game.ammo == magazines[weapon] and not game.loadout_locked)
+	game.choose_weapon(0)
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	game.move_to(Vector2i(2, 1))
+	game.choose_weapon(1)
+	assert(game.weapon_id == 0 and game.weapon_select.disabled, "Movement locks loadout")
+	print("PASS: five weapon profiles, body/head damage and AP, accuracy curves, burst support/consumption, shotgun range, magazine-specific partial/full reloads, pre-raid choice and loadout locking")
+	return true
+
+func test_bleeding_and_bandages(game) -> bool:
+	var rolls = RandomNumberGenerator.new()
+	var bleed_seed = -1
+	for candidate in range(1000):
+		rolls.seed = candidate
+		if rolls.randi_range(1, 100) <= game.BLEED_CHANCE:
+			bleed_seed = candidate
+			break
+	assert(bleed_seed >= 0)
+	game.new_raid()
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	game.bleed_rng.seed = bleed_seed
+	var state = game.bleed_rng.state
+	game.take_damage(0)
+	assert(game.hp == 100 and not game.bleeding and game.bleed_rng.state == state, "Misses cannot trigger bleeding")
+	game.bleed_rng.seed = safe_bleed_seed()
+	game.take_damage(1)
+	assert(game.hp == 99 and not game.bleeding, "Damage must also be able to avoid bleeding")
+	game.bleed_rng.seed = bleed_seed
+	game.take_damage(1)
+	assert(game.hp == 98 and game.bleeding)
+	game.refresh()
+	assert("BLEED -3" in game.intel.text and not game.bandage_button.disabled)
+	state = game.bleed_rng.state
+	game.take_damage(1)
+	assert(game.hp == 97 and game.bleed_rng.state == state, "Bleeding does not stack or roll again")
+	await process_frame
+	await process_frame
+	assert(game.hp == 97 and game.ticks == 0, "Bleeding must freeze while idle")
+	game.move_to(Vector2i(4, 1))
+	assert(game.hp == 88 and game.ticks == 3, "Travel must apply bleeding once per actual exploration step")
+	game.ammo = 0
+	game.reload_weapon()
+	assert(game.hp == 85 and game.ticks == 4, "Exploration reload is one bleeding tick")
+	game.enemies.append({"pos": Vector2i(5, 1), "hp": 0, "loot_kind": 0, "searched": false})
+	game.search_body(0)
+	assert(game.hp == 82 and game.ticks == 5, "Exploration body search is one bleeding tick")
+	game.apply_loot(1, "Crate")
+	assert(game.hp == 100 and game.bleeding, "Health pickups must not stop bleeding")
+	var dressings = game.bandages
+	game.apply_loot(3, "Crate")
+	assert(game.bandages == dressings + 1 and game.hp == 100)
+	game.hp = 50
+	game.bandage_button.pressed.emit()
+	assert(not game.bleeding and game.hp == 50 and game.bandages == dressings and game.ticks == 6)
+	game.use_bandage()
+	assert(game.ticks == 6 and game.bandages == dressings, "No bleeding must not waste time or bandages")
+	game.bleeding = true
+	game.bandages = 0
+	game.use_bandage()
+	assert(game.bleeding and game.ticks == 6, "No bandages must not stop bleeding")
+	game.bandages = 1
+	game.combat = true
+	game.ap = 0
+	game.use_bandage()
+	assert(game.bleeding and game.bandages == 1 and game.ap == 0)
+	game.ap = 4
+	game.use_bandage()
+	assert(not game.bleeding and game.hp == 50 and game.ap == 3 and game.ticks == 6 and game.bandages == 0)
+	game.bleeding = true
+	game.move_to(Vector2i(3, 1))
+	assert(game.hp == 50, "Combat movement must not charge an extra bleeding tick")
+	game.enemies.clear()
+	game.enemies.append({"pos": Vector2i(6, 1), "hp": 1000, "facing": Vector2i.RIGHT})
+	game.selected = 0
+	game.aim_weapon()
+	game.shoot()
+	assert(game.hp == 50 and game.bleeding, "Combat actions do not each charge bleeding")
+	game.enemies.clear()
+	game.enemy_turn()
+	assert(game.hp == 47 and not game.combat, "One completed combat round applies bleeding once")
+	assert(not game.aiming, "Bleeding damage cancels Aim")
+	game.enemies.append({"pos": Vector2i(4, 1), "hp": 0, "loot_kind": 4, "searched": false})
+	game.search_body(0)
+	assert(game.bandages == 1 and game.enemies[0].searched and game.bleeding, "Bodies can supply bandages without automatically using them")
+	game.hp = 4
+	var saved_bank = game.stash
+	game.move_to(Vector2i(6, 1))
+	assert(game.finished and game.hp == 0 and game.player == Vector2i(5, 1), "Bleeding death must interrupt multi-tile travel")
+	assert(game.stash == saved_bank and not game.can_bandage() and not game.can_reload())
+	game.new_raid()
+	assert(not game.bleeding and game.bandages == 1 and game.hp == 100)
+	assert(game.loot.any(func(crate): return crate.kind in [3, 4]), "Every raid must offer lootable bandages")
+	game.enemies.clear()
+	game.player = Vector2i(1, 1)
+	game.enemies.append({"pos": Vector2i(2, 1), "hp": 60, "facing": Vector2i.LEFT})
+	game.combat = true
+	var two_hits_seed = -1
+	for candidate in range(1000):
+		rolls.seed = candidate
+		var first = rolls.randi_range(1, 100)
+		var second = rolls.randi_range(1, 100)
+		if first <= 87 and second <= 87:
+			two_hits_seed = candidate
+			break
+	assert(two_hits_seed >= 0)
+	game.rng.seed = two_hits_seed
+	game.bleed_rng.seed = bleed_seed
+	game.enemy_turn()
+	assert(game.bleeding and game.hp == 73, "Actual enemy hits must trigger bleeding and exactly one three-HP round charge")
+	game.bandage_button.pressed.emit()
+	assert(not game.bleeding and game.bandages == 0 and game.hp == 73 and game.ap == 3)
+	game.new_raid()
+	print("PASS: bleeding chance and misses, non-stacking status, idle freeze, exploration move/reload/search ticks, single combat-round damage, healing cannot stop bleeding, bandage crate/body loot, 1-tick/1-AP treatment, invalid uses, bleeding death/travel interruption, raid reset")
 	return true
