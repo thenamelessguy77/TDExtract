@@ -6,7 +6,6 @@ const BUILDINGS = [Rect2i(3, 14, 6, 6), Rect2i(14, 3, 7, 6), Rect2i(14, 14, 7, 7
 const DOORS = [Vector2i(6, 19), Vector2i(14, 6), Vector2i(17, 14)]
 var MAP: Array[String] = []
 const AP_PER_TURN = 4
-const MAX_AP = 8
 const AIM_BONUS = 30
 const MAP_VIEW_SIZE = Vector2(432, 360)
 const SHOT_PROFILES = [
@@ -535,7 +534,7 @@ func enemy_turn():
 				e.pos = best
 			else:
 				patrol_step(e)
-	ap = mini(MAX_AP, ap + AP_PER_TURN)
+	ap = AP_PER_TURN
 	ticks += 1
 	message = "Enemy turn: %d damage. Your turn." % damage
 	if hp <= 0:
@@ -578,7 +577,7 @@ func refresh():
 	status.text = "HP %d • LOOT %d • BANK %d • OBJ %s" % [hp, cargo, stash, "OK" if objective_collected else "--"]
 	ammo_status.text = "GUN %d/%d  •  AMMO %d  •  TOTAL %d" % [ammo, MAGAZINE_CAPACITY, reserve, ammo + reserve]
 	reload_button.tooltip_text = "Reload: 2 AP" if combat else "Reload: 1 world tick"
-	intel.text = ("COMBAT • %d AP (max 8)" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
+	intel.text = ("COMBAT • %d/4 AP" % ap) if combat else "EXPLORATION   •   TICK %d" % ticks
 	if aiming:
 		intel.text += " • AIMED"
 	if adjacent_cover(player):
@@ -599,7 +598,7 @@ func refresh():
 	fire_button.disabled = not can_fire()
 	reload_button.disabled = not can_reload()
 	end_button.disabled = finished or not combat
-	end_button.tooltip_text = "End turn: bank unused AP and gain four, up to eight. Enemies act first."
+	end_button.tooltip_text = "End turn: enemies act, then start your next turn with four AP. Unused AP is lost."
 	objective_button.text = "EXFIL" if objective_collected else "OBJECTIVE"
 	objective_button.disabled = not objective_collected and not objective_visible()
 	search_button.disabled = finished or (combat and ap < 1) or nearby_body() < 0
@@ -789,7 +788,7 @@ func corner_cover_at(p: Vector2i, attacker: Vector2i) -> bool:
 
 func enter_combat():
 	if not combat:
-		ap = maxi(ap, AP_PER_TURN)
+		ap = AP_PER_TURN
 	combat = true
 
 func finish_cleared_engagement():

@@ -405,14 +405,14 @@ func test_combat_options(game) -> bool:
 	game.combat = true
 	assert(game.ap == 4)
 	game.enemy_turn()
-	assert(game.ap == 8)
+	assert(game.ap == 4)
 	game.combat = true
 	game.enemy_turn()
-	assert(game.ap == 8, "Banked AP must cap at eight")
+	assert(game.ap == 4, "Skipping a full turn must not accumulate AP")
 	game.combat = true
 	game.ap = 1
 	game.enemy_turn()
-	assert(game.ap == 5, "Unused AP must carry over and gain four")
+	assert(game.ap == 4, "Unused AP must be discarded at the next turn")
 	game.combat = true
 	game.ap = 4
 	game.enemies.append({"pos": Vector2i(4, 1), "hp": 1000, "facing": Vector2i.RIGHT})
@@ -429,10 +429,10 @@ func test_combat_options(game) -> bool:
 	assert(game.ap == 3, "Aim cannot stack or spend twice")
 	game.enemies.clear()
 	game.enemy_turn()
-	assert(game.aiming and game.ap == 7, "Aim persists across turns when no hit lands")
+	assert(game.aiming and game.ap == 4, "Aim persists across turns when no hit lands")
 	game.combat = true
 	game.move_to(Vector2i(2, 1))
-	assert(not game.aiming and game.ap == 6)
+	assert(not game.aiming and game.ap == 3)
 	game.aim_weapon()
 	game.take_damage(0)
 	assert(game.aiming, "Misses must not cancel Aim")
@@ -473,7 +473,7 @@ func test_combat_options(game) -> bool:
 		game.enemies.append({"pos": Vector2i(4, 1), "hp": 1000, "facing": Vector2i.RIGHT})
 		game.selected = 0
 		game.combat = true
-		game.ap = 8
+		game.ap = 4
 		game.ammo = 7
 		game.aiming = true
 		game.choose_shot(mode)
@@ -488,17 +488,17 @@ func test_combat_options(game) -> bool:
 		game.shoot()
 		var damages = [35, 60, 35]
 		assert(game.enemies[0].hp == 1000 - hits * damages[mode])
-		assert(game.ammo == 7 - rounds and game.ap == 8 - (2 if mode == 2 else 1))
+		assert(game.ammo == 7 - rounds and game.ap == 4 - (2 if mode == 2 else 1))
 		assert(game.aiming, "Firing any attack must preserve Aim")
 		var remaining = game.ammo
 		game.shoot()
 		assert(game.aiming and game.ammo < remaining, "Aim must persist through successive attacks")
 	game.choose_shot(2)
 	game.ammo = 1
-	game.ap = 8
+	game.ap = 4
 	assert(not game.can_fire())
 	game.shoot()
-	assert(game.ammo == 1 and game.ap == 8, "Burst requires at least two loaded rounds")
+	assert(game.ammo == 1 and game.ap == 4, "Burst requires at least two loaded rounds")
 	game.ammo = 2
 	game.ap = 1
 	assert(not game.can_fire())
@@ -507,7 +507,7 @@ func test_combat_options(game) -> bool:
 	assert(game.ammo == 0 and game.ap == 0)
 	game.new_raid()
 	assert(game.ap == 4 and not game.aiming and game.shot_mode == 0)
-	print("PASS: four AP, banking/cap, body/head/burst odds and damage, ammo/AP accounting, Aim bonus/persistence through multiple shots/movement/hit cancellation, invalid attacks, raid reset")
+	print("PASS: four AP per turn without carryover, body/head/burst odds and damage, ammo/AP accounting, Aim bonus/persistence through multiple shots/movement/hit cancellation, invalid attacks, raid reset")
 	return true
 
 func test_full_wall_corners(game) -> bool:
@@ -602,11 +602,11 @@ func test_automatic_combat_end(game) -> bool:
 	assert(game.aiming and game.ticks == ticks_before, "Final shot keeps Aim and adds no world tick")
 	assert(game.enemies[0].has("loot_kind") and not game.enemies[0].searched)
 	game.enter_combat()
-	assert(game.combat and game.ap == 4, "Fresh engagement starts with at least four AP")
+	assert(game.combat and game.ap == 4, "Fresh engagement starts with four AP")
 	game.combat = false
 	game.ap = 7
 	game.enter_combat()
-	assert(game.ap == 7, "Banked AP above four is retained")
+	assert(game.ap == 4, "Fresh engagements reset AP to four")
 	print("PASS: automatic exit after final kill, distant unengaged patrols ignored, surviving threats retained, no extra enemy turn/tick/AP grant, body loot and Aim preserved, fresh engagement AP")
 	return true
 
