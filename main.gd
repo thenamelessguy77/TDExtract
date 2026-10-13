@@ -44,6 +44,9 @@ var inventory_dialog: AcceptDialog
 var gear_button: Button
 var bleeding = false
 var bandages = 1
+var health_kits = 0
+var inventory_heal_button: Button
+var inventory_bandage_button: Button
 var bandage_button: Button
 var player = Vector2i.ZERO
 var exfil = Vector2i.ZERO
@@ -158,14 +161,17 @@ func make_ui():
 	add_child(map_view)
 	title = make_label(Vector2(170, 20), Vector2(140, 32), 16, Color("e7efcf"))
 	title.text = "TD / EXTRACT"
-	gear_button = make_button("PISTOL", Vector2(24, 20), show_inventory)
+	gear_button = make_button("INVENTORY", Vector2(24, 20), show_inventory)
 	gear_button.size = Vector2(136, 36)
 	gear_button.add_theme_font_size_override("font_size", 14)
 	inventory_dialog = AcceptDialog.new()
-	inventory_dialog.title = "Carried ammo"
+	inventory_dialog.title = "Inventory"
 	inventory_dialog.ok_button_text = "CLOSE"
 	inventory_dialog.exclusive = true
 	add_child(inventory_dialog)
+	inventory_heal_button = inventory_dialog.add_button("USE KIT", false, "heal")
+	inventory_bandage_button = inventory_dialog.add_button("BANDAGE", false, "bandage")
+	inventory_dialog.custom_action.connect(inventory_action)
 	gun_dialog = ConfirmationDialog.new()
 	gun_dialog.title = "Weapon found"
 	gun_dialog.exclusive = true
@@ -287,13 +293,13 @@ func new_raid():
 			outdoor.append(tile)
 	for i in range(RAID_LOOT_COUNT):
 		var pool = indoor if i < RAID_LOOT_COUNT - 1 else outdoor
-		var gun = rng.randi_range(1, WEAPONS.size() - 1) if rng.randf() < 0.4 else -1
-		loot.append({"pos": pool.pop_back(), "kind": rng.randi_range(0, 4), "ammo_type": rng.randi_range(0, WEAPONS.size() - 1), "weapon_id": gun, "ammo": rng.randi_range(0, WEAPONS[gun].magazine) if gun >= 0 else 0, "gun_available": gun >= 0, "searched": false})
-	# Every raid has a hidden source of bandages, with randomized placement.
-	loot[rng.randi_range(0, loot.size() - 1)].kind = rng.randi_range(3, 4)
+		var kind = rng.randi_range(0, 3)
+		var gun = rng.randi_range(1, WEAPONS.size() - 1) if kind == 2 else -1
+		loot.append({"pos": pool.pop_back(), "kind": kind, "ammo_type": rng.randi_range(0, WEAPONS.size() - 1) if kind == 0 else -1, "weapon_id": gun, "ammo": rng.randi_range(0, WEAPONS[gun].magazine) if gun >= 0 else 0, "gun_available": kind == 2, "searched": false})
 	hp = MAX_HEALTH
 	bleeding = false
 	bandages = 1
+	health_kits = 0
 	ap = AP_PER_TURN
 	shot_mode = 0
 	aiming = false
@@ -302,7 +308,7 @@ func new_raid():
 	combat = false
 	finished = false
 	selected = -1
-	message = "Find guns and typed ammo in crates and bodies. Extract to keep your gear. Tap your weapon to view carried ammo."
+	message = "Search crates and bodies for gear. Open Inventory to view ammo and use medical items."
 	center_player()
 	refresh()
 
@@ -472,7 +478,7 @@ func move_to(target: Vector2i):
 				found_crate = crate
 				if not crate.get("searched", false):
 					crate.searched = true
-					apply_loot(crate.kind, "Crate", int(crate.get("ammo_type", 0)))
+					apply_loot(crate.kind, "Crate", maxi(0, int(crate.get("ammo_type", 0))))
 				break
 		if not combat:
 			world_tick()
@@ -584,7 +590,7 @@ func shoot():
 			hits += 1
 	message = "%s: %d/%d hits, %d damage." % [profile.name, hits, rounds, hits * attack_damage()]
 	if enemy.hp <= 0:
-		enemy.loot_kind = rng.randi_range(0, 4)
+		enemy.loot_kind = rng.randi_range(0, 3)
 		enemy.searched = false
 		selected = -1
 		message += " Hostile down."
@@ -608,12 +614,44 @@ func attack_ap() -> int:
 func attack_damage() -> int:
 	return roundi(weapon_profile().damage * 60.0 / 35.0) if shot_mode == 1 else int(weapon_profile().damage)
 
-func show_inventory():
-	var lines = ["%s: %d/%d loaded" % [weapon_profile().name, ammo, weapon_profile().magazine]]
+func refresh_inventory():
+	var lines = ["GUN: %s (%s)" % [weapon_profile().name, weapon_profile().ammo_type], "Loaded: %d/%d" % [ammo, weapon_profile().magazine], "", "CARRIED AMMO"]
 	for i in range(WEAPONS.size()):
 		lines.append("%s (%s): %d spare" % [WEAPONS[i].ammo_type, WEAPONS[i].name, carried_ammo[i]])
+	lines.append("")
+	lines.append("Health kits: %d • Bandages: %d" % [health_kits, bandages])
+	lines.append("HP: %d/%d • Bleeding: %s" % [hp, MAX_HEALTH, "YES" if bleeding else "no"])
+	lines.append("Use costs 1 AP" if combat else "Use costs 1 world tick")
 	inventory_dialog.dialog_text = "\n".join(lines)
-	inventory_dialog.popup_centered(Vector2i(360, 270))
+	inventory_heal_button.disabled = not can_use_health_kit()
+	inventory_bandage_button.disabled = not can_bandage()
+
+func show_inventory():
+	refresh_inventory()
+	inventory_dialog.popup_centered(Vector2i(390, 430))
+
+func inventory_action(action: StringName):
+	if action == "heal":
+		use_health_kit()
+	elif action == "bandage":
+		use_bandage()
+
+func can_use_health_kit() -> bool:
+	return not finished and not gun_dialog.visible and hp < MAX_HEALTH and health_kits > 0 and (not combat or ap >= 1)
+
+func use_health_kit():
+	if not can_use_health_kit():
+		return
+	health_kits -= 1
+	var healed = mini(CRATE_HEALTH, MAX_HEALTH - hp)
+	hp += healed
+	message = "Used health kit: +%d HP. Bleeding requires a bandage." % healed
+	if combat:
+		ap -= 1
+	else:
+		ticks += 1
+		world_tick()
+	refresh()
 
 func offer_gun(source: Dictionary):
 	if finished or not source.get("gun_available", false):
@@ -817,8 +855,10 @@ func refresh():
 		shot_buttons[i].set_pressed_no_signal(i == shot_mode)
 		shot_buttons[i].tooltip_text = "%d damage, %+d accuracy points, %d AP" % [roundi(weapon_profile().damage * 60.0 / 35.0) if i == 1 else weapon_profile().damage, SHOT_PROFILES[i].accuracy, 2 if i == 2 else weapon_profile().ap]
 		shot_buttons[i].disabled = finished or (i == 2 and not weapon_profile().burst)
-	gear_button.text = "%s • %s" % [weapon_profile().name, weapon_profile().ammo_type]
-	gear_button.tooltip_text = "View all carried ammo types. Guns are found in crates and bodies."
+	gear_button.text = "INVENTORY"
+	title.text = weapon_profile().name
+	gear_button.tooltip_text = "View your gun, ammo, health kits and bandages."
+	refresh_inventory()
 	bandage_button.text = "BANDAGE (%d)" % bandages
 	bandage_button.disabled = not can_bandage()
 	bandage_button.tooltip_text = "Stop bleeding: 1 AP, no healing" if combat else "Stop bleeding: 1 world tick, no healing"
@@ -949,13 +989,22 @@ func map_point(p: Vector2i) -> Vector2:
 
 func apply_loot(kind: int, source: String, ammo_type: int = 0, ammo_amount: int = -1):
 	cargo += 1
-	var rounds = ammo_amount if ammo_amount >= 0 else (CRATE_AMMO if kind in [0, 2, 4] else 0)
-	var healed = mini(CRATE_HEALTH, MAX_HEALTH - hp) if kind in [1, 2, 4] else 0
+	var rounds = ammo_amount if ammo_amount >= 0 else (CRATE_AMMO if kind == 0 else 0)
 	carried_ammo[ammo_type] += rounds
-	hp += healed
-	var dressings = 1 if kind in [3, 4] else 0
-	bandages += dressings
-	message = "%s: +%d %s, +%d HP, +%d bandage, +1 supply." % [source, rounds, WEAPONS[ammo_type].ammo_type, healed, dressings]
+	if kind == 1:
+		health_kits += 1
+	if kind == 3:
+		bandages += 1
+	var contents: Array[String] = []
+	if rounds > 0:
+		contents.append("+%d %s ammo" % [rounds, WEAPONS[ammo_type].ammo_type])
+	if kind == 1:
+		contents.append("+1 health kit")
+	if kind == 3:
+		contents.append("+1 bandage")
+	if kind == 2:
+		contents.append("gun discovered")
+	message = "%s: %s. +1 supply." % [source, ", ".join(contents)]
 
 func nearby_body() -> int:
 	# Prefer fresh bodies over already-searched bodies holding a swapped gun.

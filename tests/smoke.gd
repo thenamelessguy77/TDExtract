@@ -28,7 +28,7 @@ func run():
 	game.enemies.clear()
 	game.player = Vector2i(1, 1)
 	game.loot.clear()
-	game.loot.append({"pos": Vector2i(2, 1), "kind": 2})
+	game.loot.append({"pos": Vector2i(2, 1), "kind": 0})
 	game.move_to(Vector2i(5, 1))
 	assert(game.ticks == before + 4)
 	assert(game.cargo == 1)
@@ -150,7 +150,7 @@ func test_ammo(game) -> bool:
 	game.enemies.clear()
 	game.combat = false
 	game.loot.clear()
-	game.loot.append({"pos": Vector2i(2, 1), "kind": 2})
+	game.loot.append({"pos": Vector2i(2, 1), "kind": 0})
 	game.move_to(Vector2i(2, 1))
 	assert(game.reserve == 7 and game.ammo == 1, "Crates add reserve ammo without loading the gun")
 	game.move_to(Vector2i(1, 1))
@@ -178,25 +178,35 @@ func test_health_and_cover(game) -> bool:
 	game.loot.clear()
 	game.player = Vector2i(1, 1)
 	game.hp = 50
-	game.loot.append({"pos": Vector2i(2, 1), "kind": 2})
+	game.loot.append({"pos": Vector2i(2, 1), "kind": 1})
 	game.move_to(Vector2i(2, 1))
-	assert(game.hp == 75 and game.ticks == 1, "Crates heal without an extra action")
+	assert(game.hp == 50 and game.health_kits == 1 and game.ticks == 1, "Health pickups are carried without automatic healing")
 	game.move_to(Vector2i(1, 1))
 	game.move_to(Vector2i(2, 1))
-	assert(game.hp == 75, "A looted crate cannot heal twice")
+	assert(game.health_kits == 1, "A looted crate cannot award a kit twice")
+	game.show_inventory()
+	assert("Health kits: 1" in game.inventory_dialog.dialog_text and "Bandages: 1" in game.inventory_dialog.dialog_text)
+	game.inventory_dialog.custom_action.emit("heal")
+	assert(game.hp == 75 and game.health_kits == 0 and game.ticks == 4)
+	game.inventory_dialog.hide()
+	game.use_health_kit()
+	assert(game.hp == 75 and game.ticks == 4, "No kit must cost no time")
+	game.health_kits = 2
 	game.hp = 90
-	game.loot.append({"pos": Vector2i(3, 1), "kind": 2})
-	game.move_to(Vector2i(3, 1))
-	assert(game.hp == 100, "Healing must cap at maximum health")
-	game.loot.append({"pos": Vector2i(4, 1), "kind": 2})
-	game.move_to(Vector2i(4, 1))
-	assert(game.hp == 100 and game.cargo == 3, "Full health still allows looting")
-	game.hp = 70
 	game.combat = true
-	game.ap = 2
-	game.loot.append({"pos": Vector2i(5, 1), "kind": 2})
-	game.move_to(Vector2i(5, 1))
-	assert(game.hp == 95 and game.ap == 1, "Combat crate healing only costs the movement AP")
+	game.ap = 0
+	game.use_health_kit()
+	assert(game.hp == 90 and game.health_kits == 2)
+	game.ap = 4
+	game.use_health_kit()
+	assert(game.hp == 100 and game.health_kits == 1 and game.ap == 3 and game.ticks == 4, "Combat kits cost one AP and cap health")
+	game.use_health_kit()
+	assert(game.health_kits == 1 and game.ap == 3, "Full health must not waste a kit or AP")
+	game.hp = 70
+	game.bleeding = true
+	game.use_health_kit()
+	assert(game.hp == 95 and game.bleeding and game.ap == 2, "Health kits do not stop bleeding")
+	game.bleeding = false
 	var north = Vector2i(3, 8)
 	var south = Vector2i(3, 10)
 	assert(not game.walkable(Vector2i(3, 9)) and not game.blocks_sight(Vector2i(3, 9)))
@@ -245,7 +255,7 @@ func test_health_and_cover(game) -> bool:
 	assert(game.hp == 76, "Enemy can fire twice over its own cover without an aim penalty")
 	assert(not game.walkable(Vector2i(3, 3)) and game.blocks_sight(Vector2i(3, 3)))
 	assert(not game.line_of_sight(Vector2i(13, 4), Vector2i(15, 4)), "Full walls still block visibility")
-	print("PASS: crate healing and health cap, no extra heal action, low-cover movement/LOS, automatic directional cover, flanking, reciprocal shots, own-cover accuracy, cover HUD")
+	print("PASS: carried health kits, inventory medical actions, health cap, one-tick/one-AP healing, invalid uses, low-cover movement/LOS, automatic directional cover, flanking, reciprocal shots, own-cover accuracy, cover HUD")
 	return true
 
 func test_objective_facing_loot(game) -> bool:
@@ -264,11 +274,11 @@ func test_objective_facing_loot(game) -> bool:
 		for e in game.enemies:
 			assert(game.DIRS.has(e.facing) and e.pos != game.objective)
 		for crate in game.loot:
-			assert(crate.pos != game.objective and crate.kind >= 0 and crate.kind <= 4)
+			assert(crate.pos != game.objective and crate.kind >= 0 and crate.kind <= 3)
 			loot_kinds[crate.kind] = true
 		game.enemies.clear()
 		assert(not game.path_to(game.objective).is_empty())
-	assert(objective_locations.size() > 1 and loot_kinds.size() == 5)
+	assert(objective_locations.size() > 1 and loot_kinds.size() == 4)
 	game.player = game.exfil
 	var bank = game.stash
 	game.extract()
@@ -277,15 +287,19 @@ func test_objective_facing_loot(game) -> bool:
 	game.objective = Vector2i(2, 1)
 	game.move_to(game.objective)
 	assert(game.objective_collected)
-	for kind in range(3):
+	for kind in range(4):
 		game.loot.clear()
 		game.loot.append({"pos": Vector2i(3, 1), "kind": kind})
 		game.player = Vector2i(2, 1)
 		game.hp = 50
 		game.reserve = 0
+		var kits_before = game.health_kits
+		var bandages_before = game.bandages
 		game.move_to(Vector2i(3, 1))
-		assert(game.reserve == (0 if kind == 1 else 7))
-		assert(game.hp == (50 if kind == 0 else 75))
+		assert(game.health_kits == kits_before + (1 if kind == 1 else 0))
+		assert(game.bandages == bandages_before + (1 if kind == 3 else 0))
+		assert(game.reserve == (7 if kind == 0 else 0))
+		assert(game.hp == 50, "Loot never automatically heals")
 	game.player = Vector2i(2, 1)
 	var guard = {"pos": Vector2i(4, 1), "hp": 60, "facing": Vector2i.RIGHT}
 	assert(game.visible(guard) and not game.enemy_can_see_player(guard), "Player can see a guard facing away without being detected")
@@ -339,14 +353,14 @@ func test_map_and_bodies(game) -> bool:
 		assert(indoor_count == 3)
 	game.enemies.clear()
 	game.player = Vector2i(1, 1)
-	game.enemies.append({"pos": Vector2i(2, 1), "hp": 0, "loot_kind": 2, "searched": false})
+	game.enemies.append({"pos": Vector2i(2, 1), "hp": 0, "loot_kind": 0, "searched": false})
 	game.hp = 50
 	game.reserve = 0
 	game.ticks = 0
 	game.cargo = 0
 	game.combat = false
 	game.search_body(0)
-	assert(game.enemies[0].searched and game.hp == 75 and game.reserve == 7 and game.cargo == 1 and game.ticks == 1)
+	assert(game.enemies[0].searched and game.hp == 50 and game.reserve == 7 and game.cargo == 1 and game.ticks == 1)
 	game.search_body(0)
 	assert(game.ticks == 1 and game.cargo == 1, "Bodies can only be searched once")
 	game.enemies[0].searched = false
@@ -784,12 +798,17 @@ func test_bleeding_and_bandages(game) -> bool:
 	game.search_body(0)
 	assert(game.hp == 82 and game.ticks == 5, "Exploration body search is one bleeding tick")
 	game.apply_loot(1, "Crate")
-	assert(game.hp == 100 and game.bleeding, "Health pickups must not stop bleeding")
+	assert(game.hp == 82 and game.health_kits == 1 and game.bleeding)
+	game.combat = true
+	game.ap = 4
+	game.use_health_kit()
+	game.combat = false
+	assert(game.hp == 100 and game.bleeding, "Health kits must not stop bleeding")
 	var dressings = game.bandages
 	game.apply_loot(3, "Crate")
 	assert(game.bandages == dressings + 1 and game.hp == 100)
 	game.hp = 50
-	game.bandage_button.pressed.emit()
+	game.inventory_dialog.custom_action.emit("bandage")
 	assert(not game.bleeding and game.hp == 50 and game.bandages == dressings and game.ticks == 6)
 	game.use_bandage()
 	assert(game.ticks == 6 and game.bandages == dressings, "No bleeding must not waste time or bandages")
@@ -818,7 +837,7 @@ func test_bleeding_and_bandages(game) -> bool:
 	game.enemy_turn()
 	assert(game.hp == 47 and not game.combat, "One completed combat round applies bleeding once")
 	assert(not game.aiming, "Bleeding damage cancels Aim")
-	game.enemies.append({"pos": Vector2i(4, 1), "hp": 0, "loot_kind": 4, "searched": false})
+	game.enemies.append({"pos": Vector2i(4, 1), "hp": 0, "loot_kind": 3, "searched": false})
 	game.search_body(0)
 	assert(game.bandages == 1 and game.enemies[0].searched and game.bleeding, "Bodies can supply bandages without automatically using them")
 	game.hp = 4
@@ -828,7 +847,7 @@ func test_bleeding_and_bandages(game) -> bool:
 	assert(game.stash == saved_bank and not game.can_bandage() and not game.can_reload())
 	game.new_raid()
 	assert(not game.bleeding and game.bandages == 1 and game.hp == 100)
-	assert(game.loot.any(func(crate): return crate.kind in [3, 4]), "Every raid must offer lootable bandages")
+	assert(game.health_kits == 0, "A new raid resets medical supplies")
 	game.enemies.clear()
 	game.player = Vector2i(1, 1)
 	game.enemies.append({"pos": Vector2i(2, 1), "hp": 60, "facing": Vector2i.LEFT})
@@ -846,7 +865,7 @@ func test_bleeding_and_bandages(game) -> bool:
 	game.bleed_rng.seed = bleed_seed
 	game.enemy_turn()
 	assert(game.bleeding and game.hp == 73, "Actual enemy hits must trigger bleeding and exactly one three-HP round charge")
-	game.bandage_button.pressed.emit()
+	game.inventory_dialog.custom_action.emit("bandage")
 	assert(not game.bleeding and game.bandages == 0 and game.hp == 73 and game.ap == 3)
 	game.new_raid()
 	print("PASS: bleeding chance and misses, non-stacking status, idle freeze, exploration move/reload/search ticks, single combat-round damage, healing cannot stop bleeding, bandage crate/body loot, 1-tick/1-AP treatment, invalid uses, bleeding death/travel interruption, raid reset")
@@ -862,8 +881,13 @@ func test_gear_loot_and_persistence(game) -> bool:
 		game.rng.seed = seed_value
 		game.new_raid()
 		for crate in game.loot:
-			assert(not crate.searched and crate.ammo_type >= 0 and crate.ammo_type < 5)
-			ammo_types[crate.ammo_type] = true
+			assert(not crate.searched and crate.kind >= 0 and crate.kind <= 3)
+			assert(crate.gun_available == (crate.kind == 2), "A crate holds exactly one category, never a bonus gun")
+			if crate.kind == 0:
+				assert(crate.ammo_type >= 0 and crate.ammo_type < 5)
+				ammo_types[crate.ammo_type] = true
+			else:
+				assert(crate.ammo_type == -1, "Non-ammo crates contain no spare rounds")
 			if crate.gun_available:
 				crate_weapons[crate.weapon_id] = true
 				assert(crate.weapon_id > 0 and crate.weapon_id < 5 and crate.ammo <= game.WEAPONS[crate.weapon_id].magazine)
@@ -876,7 +900,8 @@ func test_gear_loot_and_persistence(game) -> bool:
 	game.loot.clear()
 	game.player = Vector2i(1, 1)
 	game.exfil = Vector2i(10, 10)
-	var crate = {"pos": Vector2i(2, 1), "kind": 0, "ammo_type": 1, "weapon_id": 1, "ammo": 6, "gun_available": true, "searched": false}
+	game.carried_ammo[1] = 7
+	var crate = {"pos": Vector2i(2, 1), "kind": 2, "ammo_type": -1, "weapon_id": 1, "ammo": 6, "gun_available": true, "searched": false}
 	game.loot.append(crate)
 	game.move_to(Vector2i(5, 1))
 	assert(game.player == Vector2i(2, 1) and game.ticks == 1 and game.gun_dialog.visible, "Discovery must interrupt travel and ask before equipping")
