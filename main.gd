@@ -1,9 +1,13 @@
 extends Control
 
-const MAP_SIZE = 24
+const MAP_SIZE = 48
+const DISTRICT_SIZE = 24
+const DISTRICT_OFFSETS = [Vector2i(0, 0), Vector2i(24, 0), Vector2i(0, 24), Vector2i(24, 24)]
 const EDGE_BAND = 2
-const BUILDINGS = [Rect2i(3, 14, 6, 6), Rect2i(14, 3, 7, 6), Rect2i(14, 14, 7, 7)]
-const DOORS = [Vector2i(6, 19), Vector2i(14, 6), Vector2i(17, 14)]
+const BASE_BUILDINGS = [Rect2i(3, 14, 6, 6), Rect2i(14, 3, 7, 6), Rect2i(14, 14, 7, 7)]
+const BASE_DOORS = [Vector2i(6, 19), Vector2i(14, 6), Vector2i(17, 14)]
+var BUILDINGS: Array[Rect2i] = []
+var DOORS: Array[Vector2i] = []
 var MAP: Array[String] = []
 const AP_PER_TURN = 4
 const AIM_BONUS = 30
@@ -25,9 +29,9 @@ const BLEED_DAMAGE = 3
 const MAX_HEALTH = 100
 const CRATE_HEALTH = 25
 const COVER_PENALTY = 25
-const RAID_LOOT_COUNT = 4
-const OBJECTIVE_MIN_DISTANCE = 8
-const RAID_ENEMY_COUNT = 6
+const RAID_LOOT_COUNT = 16
+const OBJECTIVE_MIN_DISTANCE = 16
+const RAID_ENEMY_COUNT = 24
 const CRATE_AMMO = 7
 const COMBAT_RELOAD_AP = 2
 const CELL = 36.0
@@ -277,10 +281,14 @@ func new_raid():
 	objective_collected = false
 	enemies.clear()
 	for i in range(RAID_ENEMY_COUNT):
-		var pos = floor_tiles.pop_back()
-		while distance(pos, player) < 5:
-			floor_tiles.push_front(pos)
-			pos = floor_tiles.pop_back()
+		var pos = Vector2i.ZERO
+		for index in range(floor_tiles.size() - 1, -1, -1):
+			var candidate = floor_tiles[index]
+			if district_at(candidate) == i % DISTRICT_OFFSETS.size() and distance(candidate, player) >= 5:
+				pos = candidate
+				floor_tiles.remove_at(index)
+				break
+		assert(pos != Vector2i.ZERO, "Every district must have safe patrol spawn locations")
 		var gun = rng.randi_range(0, WEAPONS.size() - 1)
 		enemies.append({"pos": pos, "hp": 60, "facing": DIRS[rng.randi_range(0, 3)], "alerted": false, "last_seen": pos, "weapon_id": gun, "ammo_type": gun, "ammo": WEAPONS[gun].magazine, "reserve": rng.randi_range(0, WEAPONS[gun].magazine), "gun_available": true})
 	loot.clear()
@@ -292,10 +300,17 @@ func new_raid():
 		else:
 			outdoor.append(tile)
 	for i in range(RAID_LOOT_COUNT):
-		var pool = indoor if i < RAID_LOOT_COUNT - 1 else outdoor
+		var pool = indoor if i < RAID_LOOT_COUNT * 3 / 4 else outdoor
+		var pos = Vector2i.ZERO
+		for index in range(pool.size() - 1, -1, -1):
+			if district_at(pool[index]) == i % DISTRICT_OFFSETS.size():
+				pos = pool[index]
+				pool.remove_at(index)
+				break
+		assert(pos != Vector2i.ZERO, "Each district needs indoor and outdoor loot positions")
 		var kind = rng.randi_range(0, 3)
 		var gun = rng.randi_range(1, WEAPONS.size() - 1) if kind == 2 else -1
-		loot.append({"pos": pool.pop_back(), "kind": kind, "ammo_type": rng.randi_range(0, WEAPONS.size() - 1) if kind == 0 else -1, "weapon_id": gun, "ammo": rng.randi_range(0, WEAPONS[gun].magazine) if gun >= 0 else 0, "gun_available": kind == 2, "searched": false})
+		loot.append({"pos": pos, "kind": kind, "ammo_type": rng.randi_range(0, WEAPONS.size() - 1) if kind == 0 else -1, "weapon_id": gun, "ammo": rng.randi_range(0, WEAPONS[gun].magazine) if gun >= 0 else 0, "gun_available": kind == 2, "searched": false})
 	hp = MAX_HEALTH
 	bleeding = false
 	bandages = 1
@@ -879,8 +894,10 @@ func _draw():
 	draw_rect(Rect2(Vector2.ZERO, size), Color("101b1b"))
 
 func draw_map(canvas: Control):
-	for y in range(MAP.size()):
-		for x in range(MAP[0].length()):
+	var first = Vector2i(camera / CELL)
+	var last = Vector2i((camera + MAP_VIEW_SIZE) / CELL) + Vector2i.ONE
+	for y in range(maxi(0, first.y), mini(MAP.size(), last.y)):
+		for x in range(maxi(0, first.x), mini(MAP[0].length(), last.x)):
 			var p = Vector2i(x, y)
 			var rect = Rect2(map_point(p), Vector2.ONE * (CELL - 2))
 			canvas.draw_rect(rect, Color("4a5551") if blocks_sight(p) else (Color("354039") if is_indoors(p) else Color("23332f")))
@@ -932,7 +949,16 @@ func draw_cover_edges(canvas: Control, p: Vector2i, color: Color):
 			var tangent = Vector2(-normal.y, normal.x)
 			canvas.draw_line(center + normal * 15 - tangent * 9, center + normal * 15 + tangent * 9, color, 3)
 
+func district_at(p: Vector2i) -> int:
+	return floori(float(p.x) / DISTRICT_SIZE) + floori(float(p.y) / DISTRICT_SIZE) * 2
+
 func build_map():
+	BUILDINGS.clear()
+	DOORS.clear()
+	for offset in DISTRICT_OFFSETS:
+		for i in range(BASE_BUILDINGS.size()):
+			BUILDINGS.append(Rect2i(BASE_BUILDINGS[i].position + offset, BASE_BUILDINGS[i].size))
+			DOORS.append(BASE_DOORS[i] + offset)
 	var rows: Array[String] = []
 	for y in range(MAP_SIZE):
 		var row = ""
@@ -940,10 +966,11 @@ func build_map():
 			row += "#" if x == 0 or y == 0 or x == MAP_SIZE - 1 or y == MAP_SIZE - 1 else "."
 		rows.append(row)
 	MAP = rows
-	for block in [Rect2i(3, 2, 2, 2), Rect2i(7, 3, 2, 2), Rect2i(3, 6, 2, 2), Rect2i(7, 7, 2, 2)]:
-		for y in range(block.position.y, block.end.y):
-			for x in range(block.position.x, block.end.x):
-				set_tile(Vector2i(x, y), "#")
+	for offset in DISTRICT_OFFSETS:
+		for block in [Rect2i(3, 2, 2, 2), Rect2i(7, 3, 2, 2), Rect2i(3, 6, 2, 2), Rect2i(7, 7, 2, 2)]:
+			for y in range(block.position.y, block.end.y):
+				for x in range(block.position.x, block.end.x):
+					set_tile(Vector2i(x, y) + offset, "#")
 	for i in range(BUILDINGS.size()):
 		var room = BUILDINGS[i]
 		for y in range(room.position.y, room.end.y):
@@ -951,12 +978,14 @@ func build_map():
 				if x == room.position.x or x == room.end.x - 1 or y == room.position.y or y == room.end.y - 1:
 					set_tile(Vector2i(x, y), "#")
 		set_tile(DOORS[i], ".")
-	for p in [Vector2i(3, 9), Vector2i(4, 9), Vector2i(10, 4), Vector2i(10, 5), Vector2i(10, 10), Vector2i(11, 10), Vector2i(4, 12), Vector2i(5, 12), Vector2i(5, 16), Vector2i(6, 17), Vector2i(17, 5), Vector2i(17, 6), Vector2i(17, 17), Vector2i(18, 17)]:
-		assert(walkable(p))
-		for y in range(-1, 2):
-			for x in range(-1, 2):
-				assert(not blocks_sight(p + Vector2i(x, y)), "Low cover must have a floor-tile gap from full walls, including diagonals")
-		set_tile(p, "=")
+	for offset in DISTRICT_OFFSETS:
+		for local_tile in [Vector2i(3, 9), Vector2i(4, 9), Vector2i(10, 4), Vector2i(10, 5), Vector2i(10, 10), Vector2i(11, 10), Vector2i(4, 12), Vector2i(5, 12), Vector2i(5, 16), Vector2i(6, 17), Vector2i(17, 5), Vector2i(17, 6), Vector2i(17, 17), Vector2i(18, 17)]:
+			var p = local_tile + offset
+			assert(walkable(p))
+			for y in range(-1, 2):
+				for x in range(-1, 2):
+					assert(not blocks_sight(p + Vector2i(x, y)), "Low cover must have a floor-tile gap from full walls, including diagonals")
+			set_tile(p, "=")
 
 func set_tile(p: Vector2i, value: String):
 	MAP[p.y] = MAP[p.y].substr(0, p.x) + value + MAP[p.y].substr(p.x + 1)

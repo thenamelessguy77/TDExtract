@@ -13,7 +13,7 @@ func run():
 	game.rng.seed = 77
 	game.new_raid()
 	assert(game.distance(game.player, game.exfil) >= 8)
-	assert(game.enemies.size() == 6 and game.loot.size() == 4)
+	assert(game.enemies.size() == 24 and game.loot.size() == 16)
 	var cells = [game.player, game.exfil, game.objective]
 	for e in game.enemies:
 		assert(game.walkable(e.pos) and not cells.has(e.pos))
@@ -267,9 +267,9 @@ func test_objective_facing_loot(game) -> bool:
 		assert(game.distance(game.player, game.objective) >= 8)
 		assert(game.is_outskirts(game.player) and not game.is_indoors(game.player))
 		assert(game.is_outskirts(game.exfil) and not game.is_indoors(game.exfil))
-		assert(game.enemies.size() == 6)
+		assert(game.enemies.size() == 24)
 		assert(game.objective != game.exfil and game.walkable(game.objective) and game.is_indoors(game.objective))
-		assert(game.loot.size() == 4 and not game.objective_collected)
+		assert(game.loot.size() == 16 and not game.objective_collected)
 		objective_locations[game.objective] = true
 		for e in game.enemies:
 			assert(game.DIRS.has(e.facing) and e.pos != game.objective)
@@ -319,12 +319,12 @@ func test_objective_facing_loot(game) -> bool:
 	game.player = Vector2i(13, 4)
 	guard = {"pos": Vector2i(15, 4), "hp": 60, "facing": Vector2i.LEFT}
 	assert(not game.enemy_can_see_player(guard), "Full walls still block facing-based detection")
-	print("PASS: distant randomized objective, locked extraction, objective pickup, four varied crates, directional sight, player visibility, patrol facing, low/full cover detection")
+	print("PASS: distant randomized objective, locked extraction, objective pickup, sixteen varied crates, directional sight, player visibility, patrol facing, low/full cover detection")
 	return true
 
 func test_map_and_bodies(game) -> bool:
 	game.new_raid()
-	assert(game.MAP.size() == 24 and game.MAP[0].length() == 24)
+	assert(game.MAP.size() == 48 and game.MAP[0].length() == 48)
 	for y in range(24):
 		for x in range(24):
 			var p = Vector2i(x, y)
@@ -350,7 +350,16 @@ func test_map_and_bodies(game) -> bool:
 		var indoor_count = 0
 		for crate in game.loot:
 			indoor_count += int(game.is_indoors(crate.pos))
-		assert(indoor_count == 3)
+		assert(indoor_count == 12)
+		var guards_per_district = [0, 0, 0, 0]
+		var crates_per_district = [0, 0, 0, 0]
+		for guard in game.enemies:
+			guards_per_district[game.district_at(guard.pos)] += 1
+			assert(game.distance(guard.pos, game.player) >= 5)
+		for crate in game.loot:
+			crates_per_district[game.district_at(crate.pos)] += 1
+		assert(guards_per_district == [6, 6, 6, 6] and crates_per_district == [4, 4, 4, 4], "Patrols and loot must span every district")
+		assert(game.BUILDINGS.size() == 12 and game.distance(game.player, game.objective) >= 16)
 	game.enemies.clear()
 	game.player = Vector2i(1, 1)
 	game.enemies.append({"pos": Vector2i(2, 1), "hp": 0, "loot_kind": 0, "searched": false})
@@ -387,11 +396,14 @@ func test_map_and_bodies(game) -> bool:
 	assert(game.distance(previous, game.enemies[1].pos) == 1, "A body search advances patrols once")
 	game.camera = Vector2(-999, 9999)
 	game.clamp_camera()
-	assert(game.camera == Vector2(0, 504))
+	assert(game.camera == Vector2(0, game.MAP_SIZE * game.CELL - game.MAP_VIEW_SIZE.y))
+	game.camera = Vector2(9999, -999)
+	game.clamp_camera()
+	assert(game.camera == Vector2(game.MAP_SIZE * game.CELL - game.MAP_VIEW_SIZE.x, 0))
 	game.player = Vector2i(20, 20)
 	game.center_player()
 	assert(Rect2(game.camera, game.MAP_VIEW_SIZE).has_point(Vector2(game.player) * game.CELL))
-	print("PASS: 24x24 map, cover gaps including diagonals, single building entrances, accessible interiors, indoor loot bias, body search timing/AP/rewards/patrols, no duplicate or remote search, camera bounds")
+	print("PASS: 48x48 map, cover gaps including diagonals, single building entrances, accessible interiors, indoor loot bias, body search timing/AP/rewards/patrols, no duplicate or remote search, camera bounds")
 	return true
 
 func test_objective_visibility(game) -> bool:
