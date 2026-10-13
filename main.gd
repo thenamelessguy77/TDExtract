@@ -34,9 +34,17 @@ const OBJECTIVE_MIN_DISTANCE = 16
 const RAID_ENEMY_COUNT = 24
 const CRATE_AMMO = 7
 const COMBAT_RELOAD_AP = 2
+const MOVE_SECONDS = 0.09
 const CELL = 36.0
 const ORIGIN = Vector2(24, 164)
 const DIRS = [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
+var animations_enabled = true
+var movement_active = false
+var animation_running = false
+var motion_epoch = 0
+var motion_tween: Tween
+var player_draw_pos = Vector2.ZERO
+var player_motion: Array[Vector2] = []
 var rng = RandomNumberGenerator.new()
 var bleed_rng = RandomNumberGenerator.new()
 var weapon_id = 0
@@ -237,6 +245,11 @@ func occupied(p: Vector2i) -> bool:
 	return false
 
 func new_raid():
+	motion_epoch += 1
+	if is_instance_valid(motion_tween):
+		motion_tween.kill()
+	movement_active = false
+	animation_running = false
 	# Only extracted gear is secured; unextracted pickups are discarded on restart.
 	var gear = sanitize_gear(saved_gear)
 	weapon_id = gear.weapon_id
@@ -324,6 +337,7 @@ func new_raid():
 	finished = false
 	selected = -1
 	message = "Search crates and bodies for gear. Open Inventory to view ammo and use medical items."
+	player_draw_pos = Vector2(player)
 	center_player()
 	refresh()
 
@@ -446,7 +460,7 @@ func _gui_input(event):
 		pointer_last = event.position
 
 func select_tile(target: Vector2i):
-	if finished or gun_dialog.visible:
+	if busy() or finished or gun_dialog.visible:
 		return
 	for crate in loot:
 		if crate.pos == target and crate.get("searched", false) and crate.get("gun_available", false) and distance(player, target) <= 1:
@@ -467,17 +481,27 @@ func select_tile(target: Vector2i):
 	move_to(target)
 
 func move_to(target: Vector2i):
-	if finished or gun_dialog.visible:
+	if busy() or finished or gun_dialog.visible:
 		return
 	var path = path_to(target)
+	var epoch = motion_epoch
+	movement_active = not path.is_empty()
 	if path.is_empty():
 		message = "Choose a reachable, unoccupied tile."
-	for step in path:
+	while not path.is_empty():
+		var step = path.pop_front()
+		if occupied(step):
+			path = path_to(target)
+			if path.is_empty():
+				message = "Route blocked. Choose another tile."
+				break
+			continue
 		if finished:
 			break
 		if combat and ap <= 0:
 			message = "No action points. End your turn."
 			break
+		begin_motion()
 		var was_combat = combat
 		player = step
 		aiming = false
@@ -497,6 +521,10 @@ func move_to(target: Vector2i):
 				break
 		if not combat:
 			world_tick()
+		if not Rect2(camera, MAP_VIEW_SIZE).has_point(Vector2(player) * CELL + Vector2(18, 18)):
+			center_player()
+		if not await animate_motion() or epoch != motion_epoch:
+			return
 		if not found_crate.is_empty():
 			if not finished and found_crate.get("gun_available", false):
 				offer_gun(found_crate)
@@ -504,9 +532,65 @@ func move_to(target: Vector2i):
 				loot.erase(found_crate)
 		if (not was_combat and combat) or gun_dialog.visible or finished:
 			break
+	movement_active = false
 	if not Rect2(camera, MAP_VIEW_SIZE).has_point(Vector2(player) * CELL + Vector2(18, 18)):
 		center_player()
 	refresh()
+
+func busy() -> bool:
+	return movement_active or animation_running
+
+func begin_motion():
+	player_draw_pos = Vector2(player)
+	player_motion = [player_draw_pos]
+	for e in enemies:
+		e.draw_pos = Vector2(e.pos)
+		e.draw_facing = e.get("facing", Vector2i.LEFT)
+		e.motion_visible = visible(e)
+		e.motion_path = [Vector2(e.pos)]
+
+func record_enemy_motion(e: Dictionary):
+	if e.has("motion_path") and e.motion_path.back() != Vector2(e.pos):
+		e.motion_path.append(Vector2(e.pos))
+
+func motion_position(points: Array, elapsed_steps: float) -> Vector2:
+	var index = mini(floori(elapsed_steps), points.size() - 1)
+	if index >= points.size() - 1:
+		return Vector2(points.back())
+	return Vector2(points[index]).lerp(Vector2(points[index + 1]), elapsed_steps - index)
+
+func update_motion(elapsed_steps: float):
+	player_draw_pos = motion_position(player_motion, elapsed_steps)
+	for e in enemies:
+		if e.has("motion_path"):
+			e.draw_pos = motion_position(e.motion_path, elapsed_steps)
+			var segment = floori(elapsed_steps)
+			e.draw_facing = facing_toward(Vector2i(e.motion_path[segment + 1] - e.motion_path[segment])) if segment < e.motion_path.size() - 1 else e.get("facing", Vector2i.LEFT)
+	map_view.queue_redraw()
+
+func animate_motion() -> bool:
+	if player_motion.back() != Vector2(player):
+		player_motion.append(Vector2(player))
+	var steps = player_motion.size() - 1
+	for e in enemies:
+		steps = maxi(steps, e.get("motion_path", [e.pos]).size() - 1)
+	if not animations_enabled or steps == 0:
+		update_motion(float(steps))
+		return true
+	var epoch = motion_epoch
+	animation_running = true
+	refresh()
+	motion_tween = create_tween()
+	motion_tween.tween_method(update_motion, 0.0, float(steps), steps * MOVE_SECONDS)
+	await get_tree().create_timer(steps * MOVE_SECONDS).timeout
+	if epoch != motion_epoch:
+		return false
+	if is_instance_valid(motion_tween):
+		motion_tween.kill()
+	update_motion(float(steps))
+	animation_running = false
+	refresh()
+	return true
 
 func facing_toward(delta: Vector2i) -> Vector2i:
 	if absi(delta.x) >= absi(delta.y) and delta.x != 0:
@@ -536,6 +620,7 @@ func patrol_step(e: Dictionary):
 		var direction = options[rng.randi_range(0, options.size() - 1)]
 		e.facing = direction
 		e.pos += direction
+		record_enemy_motion(e)
 
 func world_tick():
 	advance_bleeding()
@@ -578,7 +663,7 @@ func shot_chance(target: Vector2i) -> int:
 	return clampi(base + SHOT_PROFILES[shot_mode].accuracy + (AIM_BONUS if aiming else 0), 5, 95)
 
 func aim_weapon():
-	if finished or not combat or ap < 1 or aiming:
+	if busy() or finished or not combat or ap < 1 or aiming:
 		return
 	ap -= 1
 	aiming = true
@@ -586,7 +671,7 @@ func aim_weapon():
 	refresh()
 
 func can_fire() -> bool:
-	return not gun_dialog.visible and not finished and combat and ap >= attack_ap() and (shot_mode != 2 or weapon_profile().burst) and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected]) and distance(player, enemies[selected].pos) <= weapon_profile().range
+	return not busy() and not gun_dialog.visible and not finished and combat and ap >= attack_ap() and (shot_mode != 2 or weapon_profile().burst) and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected]) and distance(player, enemies[selected].pos) <= weapon_profile().range
 
 func shoot():
 	if not can_fire():
@@ -642,6 +727,8 @@ func refresh_inventory():
 	inventory_bandage_button.disabled = not can_bandage()
 
 func show_inventory():
+	if busy():
+		return
 	refresh_inventory()
 	inventory_dialog.popup_centered(Vector2i(390, 430))
 
@@ -652,11 +739,12 @@ func inventory_action(action: StringName):
 		use_bandage()
 
 func can_use_health_kit() -> bool:
-	return not finished and not gun_dialog.visible and hp < MAX_HEALTH and health_kits > 0 and (not combat or ap >= 1)
+	return not busy() and not finished and not gun_dialog.visible and hp < MAX_HEALTH and health_kits > 0 and (not combat or ap >= 1)
 
 func use_health_kit():
 	if not can_use_health_kit():
 		return
+	begin_motion()
 	health_kits -= 1
 	var healed = mini(CRATE_HEALTH, MAX_HEALTH - hp)
 	hp += healed
@@ -666,6 +754,8 @@ func use_health_kit():
 	else:
 		ticks += 1
 		world_tick()
+	if not await animate_motion():
+		return
 	refresh()
 
 func offer_gun(source: Dictionary):
@@ -719,11 +809,12 @@ func advance_bleeding():
 	check_death()
 
 func can_bandage() -> bool:
-	return not gun_dialog.visible and not finished and bleeding and bandages > 0 and (not combat or ap >= 1)
+	return not busy() and not gun_dialog.visible and not finished and bleeding and bandages > 0 and (not combat or ap >= 1)
 
 func use_bandage():
 	if not can_bandage():
 		return
+	begin_motion()
 	bandages -= 1
 	bleeding = false
 	message = "Bandaged. Bleeding stopped; no health restored."
@@ -732,14 +823,17 @@ func use_bandage():
 	else:
 		ticks += 1
 		world_tick()
+	if not await animate_motion():
+		return
 	refresh()
 
 func can_reload() -> bool:
-	return not gun_dialog.visible and not finished and reserve > 0 and ammo < weapon_profile().magazine and (not combat or ap >= COMBAT_RELOAD_AP)
+	return not busy() and not gun_dialog.visible and not finished and reserve > 0 and ammo < weapon_profile().magazine and (not combat or ap >= COMBAT_RELOAD_AP)
 
 func reload_weapon():
 	if not can_reload():
 		return
+	begin_motion()
 	var rounds = mini(weapon_profile().magazine - ammo, reserve)
 	ammo += rounds
 	reserve -= rounds
@@ -750,11 +844,14 @@ func reload_weapon():
 		ticks += 1
 		message = "Reloaded %d rounds. One world tick elapsed." % rounds
 		world_tick()
+	if not await animate_motion():
+		return
 	refresh()
 
 func enemy_turn():
-	if finished or not combat or gun_dialog.visible:
+	if busy() or finished or not combat or gun_dialog.visible:
 		return
+	begin_motion()
 	var damage = 0
 	for e in enemies:
 		if finished:
@@ -799,6 +896,7 @@ func enemy_turn():
 						best = next
 				e.facing = facing_toward(best - Vector2i(e.pos)) if best != e.pos else facing_toward(target - Vector2i(e.pos))
 				e.pos = best
+				record_enemy_motion(e)
 			else:
 				patrol_step(e)
 	ap = AP_PER_TURN
@@ -818,10 +916,12 @@ func enemy_turn():
 			if enemy_can_see_player(e):
 				focus_contact(e)
 				break
+	if not await animate_motion():
+		return
 	refresh()
 
 func extract():
-	if gun_dialog.visible:
+	if busy() or gun_dialog.visible:
 		return
 	if finished or player != exfil:
 		return
@@ -843,6 +943,8 @@ func total_ammo() -> int:
 	return total
 
 func refresh():
+	if not animations_enabled:
+		player_draw_pos = Vector2(player)
 	if not is_instance_valid(status):
 		return
 	if selected >= 0 and (selected >= enemies.size() or not visible(enemies[selected])):
@@ -871,23 +973,24 @@ func refresh():
 		shot_buttons[i].tooltip_text = "%d damage, %+d accuracy points, %d AP" % [roundi(weapon_profile().damage * 60.0 / 35.0) if i == 1 else weapon_profile().damage, SHOT_PROFILES[i].accuracy, 2 if i == 2 else weapon_profile().ap]
 		shot_buttons[i].disabled = finished or (i == 2 and not weapon_profile().burst)
 	gear_button.text = "INVENTORY"
+	gear_button.disabled = busy()
 	title.text = weapon_profile().name
 	gear_button.tooltip_text = "View your gun, ammo, health kits and bandages."
 	refresh_inventory()
 	bandage_button.text = "BANDAGE (%d)" % bandages
 	bandage_button.disabled = not can_bandage()
 	bandage_button.tooltip_text = "Stop bleeding: 1 AP, no healing" if combat else "Stop bleeding: 1 world tick, no healing"
-	aim_button.disabled = finished or not combat or ap < 1 or aiming
+	aim_button.disabled = busy() or finished or not combat or ap < 1 or aiming
 	fire_button.disabled = not can_fire()
 	reload_button.disabled = not can_reload()
-	end_button.disabled = finished or not combat
+	end_button.disabled = busy() or finished or not combat
 	end_button.tooltip_text = "End turn: enemies act, then start your next turn with four AP. Unused AP is lost."
 	objective_button.text = "EXFIL" if objective_collected else "OBJECTIVE"
 	objective_button.disabled = not objective_collected and not objective_visible()
-	search_button.disabled = finished or (combat and ap < 1) or nearby_body() < 0
+	search_button.disabled = busy() or finished or (combat and ap < 1) or nearby_body() < 0
 	search_button.tooltip_text = "Search body: 1 AP" if combat else "Search body: 1 world tick"
 	map_view.queue_redraw()
-	extract_button.disabled = finished or player != exfil or not objective_collected
+	extract_button.disabled = busy() or finished or player != exfil or not objective_collected
 	queue_redraw()
 
 func _draw():
@@ -925,24 +1028,24 @@ func draw_map(canvas: Control):
 				canvas.draw_line(body_center - Vector2(8, 5), body_center + Vector2(8, 5), body_color, 4)
 				canvas.draw_line(body_center + Vector2(-8, 5), body_center + Vector2(8, -5), body_color, 4)
 			continue
-		if not visible(e):
+		if not visible(e) and not (animation_running and e.get("motion_visible", false)):
 			continue
-		var center = map_point(e.pos) + Vector2(17, 17)
+		var center = Vector2(e.get("draw_pos", Vector2(e.pos))) * CELL - camera + Vector2(17, 17)
 		canvas.draw_circle(center, 11, Color("c97061"))
-		var forward = Vector2(e.get("facing", Vector2i.LEFT))
+		var forward = Vector2(e.get("draw_facing", e.get("facing", Vector2i.LEFT)))
 		var side = Vector2(-forward.y, forward.x)
 		canvas.draw_colored_polygon(PackedVector2Array([center + forward * 14, center + forward * 4 + side * 5, center + forward * 4 - side * 5]), Color("fff0c0"))
-		draw_cover_edges(canvas, e.pos, Color("e6be91"))
+		draw_cover_edges(canvas, e.pos, Color("e6be91"), Vector2(e.get("draw_pos", Vector2(e.pos))))
 		if selected == i:
 			canvas.draw_arc(center, 15, 0, TAU, 24, Color("f4df9c"), 2)
 		canvas.draw_rect(Rect2(center + Vector2(-12, -16), Vector2(24 * maxf(e.hp, 0) / 60.0, 3)), Color("da8d79"))
-	canvas.draw_circle(map_point(player) + Vector2(17, 17), 11, Color("87c6e3"))
-	canvas.draw_circle(map_point(player) + Vector2(17, 17), 4, Color("eef4df"))
+	canvas.draw_circle(player_draw_pos * CELL - camera + Vector2(17, 17), 11, Color("87c6e3"))
+	canvas.draw_circle(player_draw_pos * CELL - camera + Vector2(17, 17), 4, Color("eef4df"))
 
-	draw_cover_edges(canvas, player, Color("a0dcd6"))
+	draw_cover_edges(canvas, player, Color("a0dcd6"), player_draw_pos)
 
-func draw_cover_edges(canvas: Control, p: Vector2i, color: Color):
-	var center = map_point(p) + Vector2(17, 17)
+func draw_cover_edges(canvas: Control, p: Vector2i, color: Color, display: Vector2):
+	var center = display * CELL - camera + Vector2(17, 17)
 	for direction in DIRS:
 		if tile_at(p + direction) == "=" or is_corner_edge(p, direction):
 			var normal = Vector2(direction)
@@ -1048,7 +1151,7 @@ func search_nearby_body():
 	search_body(nearby_body())
 
 func search_body(index: int):
-	if gun_dialog.visible:
+	if busy() or gun_dialog.visible:
 		return
 	if finished or index < 0 or index >= enemies.size() or (combat and ap < 1):
 		return
@@ -1058,6 +1161,7 @@ func search_body(index: int):
 	if body.get("searched", false):
 		offer_gun(body)
 		return
+	begin_motion()
 	body.searched = true
 	apply_loot(int(body.get("loot_kind", 0)), "Body", int(body.get("weapon_id", 0)), int(body.get("reserve", CRATE_AMMO)))
 	body.reserve = 0
@@ -1066,6 +1170,8 @@ func search_body(index: int):
 		ap -= 1
 	else:
 		world_tick()
+	if not await animate_motion():
+		return
 	if not finished and body.get("gun_available", false):
 		offer_gun(body)
 	refresh()

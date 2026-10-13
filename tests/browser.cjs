@@ -87,7 +87,19 @@ const { chromium } = require('playwright');
     // Clicking a reachable floor region exercises the actual mouse/touch event path.
     if (touch) await page.touchscreen.tap(offsetX+78*scale,offsetY+218*scale);
     else await page.mouse.click(78,218);
-    await page.waitForTimeout(300);
+    // Wait for the requested journey to finish before checking idle freeze.
+    let settled = false;
+    let priorFrame = await canvas.screenshot();
+    for(let attempt=0;attempt<100;attempt++) {
+      await page.waitForTimeout(150);
+      const frame = await canvas.screenshot();
+      if(priorFrame.equals(frame)) {settled=true;break;}
+      priorFrame=frame;
+    }
+    if(!settled) throw Error('Animated journey did not finish');
+    // Escape dismisses a possible found-gun window before testing New Raid.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
     const after = await canvas.screenshot();
     if (before.equals(after)) throw Error('Grid input did not change the rendered game');
     const idle = await canvas.screenshot();

@@ -7,6 +7,7 @@ func run():
 	var save_existed = FileAccess.file_exists("user://stash.json")
 	var original_save = FileAccess.get_file_as_string("user://stash.json") if save_existed else ""
 	var game = load("res://main.tscn").instantiate()
+	game.animations_enabled = false
 	root.add_child(game)
 	await process_frame
 	game.saved_gear = game.default_gear()
@@ -98,6 +99,7 @@ func run():
 	assert(test_weapons(game), "Weapon checks must complete")
 	assert(test_gear_loot_and_persistence(game), "Typed ammo and persistent gun checks must complete")
 	assert(await test_bleeding_and_bandages(game), "Bleeding and bandage checks must complete")
+	assert(await test_animated_movement(game), "Animated movement checks must complete")
 	print("PASS: randomized placements, idle freeze, movement ticks, loot, contact interruption, AP, enemy turn, LOS, cover, range, shooting, reloading, extraction, death, 100 raid seeds")
 	if save_existed:
 		var restore_file = FileAccess.open("user://stash.json", FileAccess.WRITE)
@@ -1019,4 +1021,55 @@ func test_gear_loot_and_persistence(game) -> bool:
 	game.save_stash(game.default_gear())
 	assert(game.sanitize_gear({"weapon_id": 200, "ammo": -2, "carried_ammo": [1]}) == {"weapon_id": 4, "ammo": 0, "carried_ammo": [24, 0, 0, 0, 0]})
 	print("PASS: pistol start, random crate/enemy guns and typed ammo, take/decline/revisit without duplication, old gun recovery, wrong-ammo reload refusal, matching corpse gun and ammo, finite enemy fire/reload/AP, inventory view, persistent extraction/next raid/death reset")
+	return true
+
+func test_animated_movement(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	var guard = {"pos": Vector2i(3, 2), "hp": 60, "facing": Vector2i.RIGHT}
+	game.enemies.append(guard)
+	game.animations_enabled = true
+	game.move_to(Vector2i(2, 1))
+	assert(game.busy() and game.ticks == 1 and game.player_draw_pos == Vector2(1, 1))
+	assert(guard.draw_pos == Vector2(3, 2) and guard.pos != Vector2i(3, 2), "Actors start the same tick from their original positions")
+	var progress_ticks = game.ticks
+	game.move_to(Vector2i(6, 1))
+	game.enemy_turn()
+	game.show_inventory()
+	assert(game.ticks == progress_ticks and not game.inventory_dialog.visible, "Inputs cannot start another action during animation")
+	await create_timer(0.02).timeout
+	var player_fraction = game.player_draw_pos.distance_to(Vector2(1, 1))
+	var enemy_fraction = Vector2(guard.draw_pos).distance_to(Vector2(3, 2))
+	assert(player_fraction > 0 and player_fraction < 1 and absf(player_fraction - enemy_fraction) < 0.001, "Player and patrol interpolate concurrently")
+	await create_timer(0.15).timeout
+	assert(not game.busy() and game.player_draw_pos == Vector2(game.player) and guard.draw_pos == Vector2(guard.pos))
+	var idle_ticks = game.ticks
+	await create_timer(0.04).timeout
+	assert(game.ticks == idle_ticks, "Finishing an animation does not advance another tick")
+	game.enemies.clear()
+	await game.move_to(Vector2i(5, 1))
+	assert(game.player == Vector2i(5, 1) and game.ticks == 4, "Each animated path tile still costs exactly one tick")
+	game.player = Vector2i(1, 1)
+	game.enemies.append({"pos": Vector2i(7, 1), "hp": 60, "facing": Vector2i.LEFT})
+	await game.move_to(Vector2i(5, 1))
+	assert(game.combat and game.player == Vector2i(2, 1) and not game.busy(), "Spotting still interrupts animated travel immediately")
+	game.enemies.clear()
+	game.ap = 2
+	await game.move_to(Vector2i(6, 1))
+	assert(game.player == Vector2i(4, 1) and game.ap == 0 and not game.busy())
+	game.enemies.append({"pos": Vector2i(30, 30), "hp": 60, "facing": Vector2i.RIGHT})
+	await game.enemy_turn()
+	assert(game.enemies[0].motion_path.size() == 3 and game.enemies[0].draw_pos == Vector2(game.enemies[0].pos), "Enemy phase preserves both tile steps instead of sliding diagonally")
+	game.enemies.clear()
+	game.combat = false
+	game.move_to(Vector2i(7, 1))
+	assert(game.busy())
+	game.new_raid()
+	var insertion = game.player
+	await create_timer(0.15).timeout
+	assert(game.player == insertion and game.ticks == 0 and not game.busy() and game.player_draw_pos == Vector2(insertion), "New Raid safely cancels pending motion and travel")
+	game.animations_enabled = false
+	print("PASS: concurrent player/patrol interpolation, action locking, exact path ticks/AP, frozen idle, animated contact interruption, enemy per-tile paths, raid restart cancellation")
 	return true
