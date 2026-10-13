@@ -99,6 +99,7 @@ func run():
 	assert(test_weapons(game), "Weapon checks must complete")
 	assert(test_gear_loot_and_persistence(game), "Typed ammo and persistent gun checks must complete")
 	assert(await test_bleeding_and_bandages(game), "Bleeding and bandage checks must complete")
+	assert(test_sight_and_zoom(game), "Sight and zoom checks must complete")
 	assert(await test_animated_movement(game), "Animated movement checks must complete")
 	print("PASS: randomized placements, idle freeze, movement ticks, loot, contact interruption, AP, enemy turn, LOS, cover, range, shooting, reloading, extraction, death, 100 raid seeds")
 	if save_existed:
@@ -218,9 +219,9 @@ func test_health_and_cover(game) -> bool:
 	assert(not game.cover_at(north, Vector2i(3, 6)), "Rear attacks flank cover")
 	assert(not game.cover_at(north, Vector2i(1, 8)), "Side attacks flank cover")
 	assert(not game.cover_at(Vector2i(2, 8), south), "A distant barrier does not protect the target")
-	assert(game.hit_chance(north, south) == 54 and game.hit_chance(south, north) == 54)
-	assert(game.hit_chance(south, Vector2i(2, 8)) == 71, "Firing over your own cover has no accuracy penalty")
-	assert(game.hit_chance(Vector2i(2, 8), south) == 46, "Only the defender's cover reduces incoming aim")
+	assert(game.hit_chance(north, south) == 60 and game.hit_chance(south, north) == 60)
+	assert(game.hit_chance(south, Vector2i(2, 8)) == 80, "Firing over your own cover has no accuracy penalty")
+	assert(game.hit_chance(Vector2i(2, 8), south) == 55, "Only the defender's cover reduces incoming aim")
 	game.player = north
 	var route = game.path_to(south)
 	assert(not route.is_empty() and route.size() > 2, "Movement must route around waist-high barriers")
@@ -233,10 +234,10 @@ func test_health_and_cover(game) -> bool:
 	game.ap = 2
 	game.ammo = 7
 	game.refresh()
-	assert("COVER" in game.intel.text and "54%" in game.intel.text)
+	assert("COVER" in game.intel.text and "60%" in game.intel.text)
 	game.shoot()
 	assert(game.ammo == 6 and game.ap == 1, "Player can fire across low cover")
-	# An enemy firing over its own cover at an uncovered flank keeps 71% aim.
+	# An enemy firing over its own cover at an uncovered flank keeps 80% aim.
 	game.player = Vector2i(2, 8)
 	game.enemies[0].pos = south
 	game.enemies[0].facing = Vector2i.UP
@@ -247,7 +248,7 @@ func test_health_and_cover(game) -> bool:
 		rolls.seed = candidate
 		var first = rolls.randi_range(1, 100)
 		var second = rolls.randi_range(1, 100)
-		if first > 46 and first <= 71 and second > 46 and second <= 71:
+		if first > 55 and first <= 80 and second > 55 and second <= 80:
 			firing_seed = candidate
 			break
 	assert(firing_seed >= 0)
@@ -327,8 +328,8 @@ func test_objective_facing_loot(game) -> bool:
 func test_map_and_bodies(game) -> bool:
 	game.new_raid()
 	assert(game.MAP.size() == 48 and game.MAP[0].length() == 48)
-	for y in range(24):
-		for x in range(24):
+	for y in range(game.MAP_SIZE):
+		for x in range(game.MAP_SIZE):
 			var p = Vector2i(x, y)
 			if game.tile_at(p) == "=":
 				for dy in range(-1, 2):
@@ -425,7 +426,7 @@ func test_objective_visibility(game) -> bool:
 	assert(game.objective_visible() and not game.objective_button.disabled)
 	assert(game.player_can_see(game.objective), "Nearby loot in clear sight is visible")
 	game.player = Vector2i(1, 1)
-	game.objective = Vector2i(10, 1)
+	game.objective = Vector2i(12, 1)
 	game.refresh()
 	assert(not game.objective_visible(), "Clear sight outside range is insufficient")
 	assert(not game.player_can_see(game.objective), "Panning to distant loot does not reveal it")
@@ -464,13 +465,13 @@ func test_combat_options(game) -> bool:
 	game.enemies.append({"pos": Vector2i(4, 1), "hp": 1000, "facing": Vector2i.RIGHT})
 	game.selected = 0
 	game.choose_shot(0)
-	assert(game.shot_chance(Vector2i(4, 1)) == 71)
+	assert(game.shot_chance(Vector2i(4, 1)) == 80)
 	game.choose_shot(1)
-	assert(game.shot_chance(Vector2i(4, 1)) == 51)
+	assert(game.shot_chance(Vector2i(4, 1)) == 60)
 	game.choose_shot(2)
-	assert(game.shot_chance(Vector2i(4, 1)) == 56)
+	assert(game.shot_chance(Vector2i(4, 1)) == 65)
 	game.aim_weapon()
-	assert(game.ap == 3 and game.aiming and game.shot_chance(Vector2i(4, 1)) == 86)
+	assert(game.ap == 3 and game.aiming and game.shot_chance(Vector2i(4, 1)) == 95)
 	game.aim_weapon()
 	assert(game.ap == 3, "Aim cannot stack or spend twice")
 	game.enemies.clear()
@@ -494,9 +495,9 @@ func test_combat_options(game) -> bool:
 		enemy_rolls.seed = candidate
 		var first_roll = enemy_rolls.randi_range(1, 100)
 		var second_roll = enemy_rolls.randi_range(1, 100)
-		if first_roll > 87 and second_roll > 87:
+		if first_roll > 90 and second_roll > 90:
 			miss_seed = candidate
-		if first_roll <= 87 and second_roll <= 87:
+		if first_roll <= 90 and second_roll <= 90:
 			hit_seed = candidate
 		if miss_seed >= 0 and hit_seed >= 0:
 			break
@@ -569,8 +570,8 @@ func test_full_wall_corners(game) -> bool:
 	assert(game.adjacent_cover(defender))
 	assert(game.line_of_sight(defender, attacker) and game.line_of_sight(attacker, defender))
 	assert(game.cover_at(defender, attacker))
-	assert(game.hit_chance(attacker, defender) == 38, "Corner reduces incoming aim by 25 points")
-	assert(game.hit_chance(defender, attacker) == 63, "Peeking around own corner does not penalize outgoing shots")
+	assert(game.hit_chance(attacker, defender) == 50, "Corner reduces incoming aim by 25 points")
+	assert(game.hit_chance(defender, attacker) == 75, "Peeking around own corner does not penalize outgoing shots")
 	assert(not game.cover_at(defender, Vector2i(1, 5)), "Opposite side flanks corner cover")
 	assert(not game.cover_at(defender, Vector2i(2, 5)), "Shots along exposed side do not receive wall protection")
 	assert(not game.line_of_sight(Vector2i(13, 4), Vector2i(15, 4)))
@@ -582,12 +583,12 @@ func test_full_wall_corners(game) -> bool:
 	game.selected = 0
 	game.combat = true
 	game.refresh()
-	assert("38%" in game.intel.text and "COVER" in game.intel.text, "Enemy corner cover is reflected in shot preview")
+	assert("50%" in game.intel.text and "COVER" in game.intel.text, "Enemy corner cover is reflected in shot preview")
 	game.player = defender
 	game.enemies[0].pos = attacker
 	game.enemies[0].facing = Vector2i.UP
 	game.refresh()
-	assert("63%" in game.intel.text and "COVER" in game.intel.text, "Player gets corner cover and keeps outgoing accuracy")
+	assert("75%" in game.intel.text and "COVER" in game.intel.text, "Player gets corner cover and keeps outgoing accuracy")
 	print("PASS: automatic full-wall corner cover, incoming penalty, unpenalized peeking, flanking, blocked walls, cardinal adjacency, horizontal corners, player/enemy preview")
 	return true
 
@@ -716,7 +717,7 @@ func test_weapons(game) -> bool:
 	var magazines = [7, 20, 6, 5, 25]
 	var damage = [35, 40, 55, 65, 24]
 	var shot_cost = [1, 1, 2, 2, 1]
-	var odds = [71, 77, 60, 86, 70]
+	var odds = [80, 83, 75, 89, 82]
 	for weapon in range(5):
 		game.new_raid()
 		var found = {"pos": game.player, "weapon_id": weapon, "ammo": magazines[weapon], "gun_available": true}
@@ -757,7 +758,7 @@ func test_weapons(game) -> bool:
 		game.choose_shot(0)
 		game.ap = 4
 		game.ammo = 1
-		game.enemies[0].pos = Vector2i(6, 1)
+		game.enemies[0].pos = Vector2i(8, 1)
 		assert(game.can_fire() == (weapon != 2), "Shotgun range must limit shooting without hiding the target")
 		game.ammo = 0
 		game.reserve = 3
@@ -871,7 +872,7 @@ func test_bleeding_and_bandages(game) -> bool:
 		rolls.seed = candidate
 		var first = rolls.randi_range(1, 100)
 		var second = rolls.randi_range(1, 100)
-		if first <= 87 and second <= 87:
+		if first <= 90 and second <= 90:
 			two_hits_seed = candidate
 			break
 	assert(two_hits_seed >= 0)
@@ -986,10 +987,10 @@ func test_gear_loot_and_persistence(game) -> bool:
 	game.hp = 100
 	game.combat = true
 	game.bleeding = false
-	var short_range_enemy = {"pos": Vector2i(6, 1), "hp": 1000, "facing": Vector2i.LEFT, "weapon_id": 2, "ammo_type": 2, "ammo": 6, "reserve": 0, "alerted": false}
+	var short_range_enemy = {"pos": Vector2i(8, 1), "hp": 1000, "facing": Vector2i.LEFT, "weapon_id": 2, "ammo_type": 2, "ammo": 6, "reserve": 0, "alerted": false}
 	game.enemies.append(short_range_enemy)
 	game.enemy_turn()
-	assert(short_range_enemy.alerted and short_range_enemy.pos == Vector2i(5, 1) and short_range_enemy.ammo == 6 and game.hp == 100, "Visible out-of-range guards must investigate without firing beyond gun range")
+	assert(short_range_enemy.alerted and short_range_enemy.pos == Vector2i(7, 1) and short_range_enemy.ammo == 6 and game.hp == 100, "Visible out-of-range guards must investigate without firing beyond gun range")
 	# Save gun and every ammo pool on extraction, then deserialize into next raid.
 	game.enemies.clear()
 	game.combat = false
@@ -1072,4 +1073,70 @@ func test_animated_movement(game) -> bool:
 	assert(game.player == insertion and game.ticks == 0 and not game.busy() and game.player_draw_pos == Vector2(insertion), "New Raid safely cancels pending motion and travel")
 	game.animations_enabled = false
 	print("PASS: concurrent player/patrol interpolation, action locking, exact path ticks/AP, frozen idle, animated contact interruption, enemy per-tile paths, raid restart cancellation")
+	return true
+
+func test_sight_and_zoom(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	var guard = {"pos": Vector2i(11, 1), "hp": 60, "facing": Vector2i.LEFT}
+	game.enemies.append(guard)
+	assert(game.player_can_see(Vector2i(11, 1)) and game.visible(guard) and game.enemy_can_see_player(guard))
+	guard.pos = Vector2i(12, 1)
+	assert(not game.player_can_see(guard.pos) and not game.visible(guard) and not game.enemy_can_see_player(guard), "Eleven tiles is outside sight")
+	guard.pos = Vector2i(11, 1)
+	game.combat = true
+	game.selected = 0
+	for weapon in [0, 1, 3, 4]:
+		game.weapon_id = weapon
+		game.ammo = 1
+		game.ap = 4
+		assert(game.can_fire(), "Long-range weapons can fire at ten tiles")
+	var long_odds = [45, 55, 75, 40]
+	for i in range(4):
+		game.weapon_id = [0, 1, 3, 4][i]
+		assert(game.shot_chance(guard.pos) == long_odds[i])
+	game.weapon_id = 2
+	assert(not game.can_fire())
+	guard.pos = Vector2i(7, 1)
+	assert(game.can_fire() and game.shot_chance(guard.pos) == 45)
+	game.camera = Vector2(400, 400)
+	var anchor = Vector2(100, 120)
+	var world_before = game.camera + anchor / game.map_zoom
+	var ticks_before = game.ticks
+	var ap_before = game.ap
+	game.set_map_zoom(0.5, anchor)
+	assert((game.camera + anchor / game.map_zoom).distance_to(world_before) < 0.001)
+	assert(game.map_view.size * game.map_view.scale == game.MAP_VIEW_SIZE)
+	game.set_map_zoom(100)
+	assert(game.map_zoom == 1.5 and game.zoom_in_button.disabled)
+	game.set_map_zoom(0.01)
+	assert(game.map_zoom == 0.5 and game.zoom_out_button.disabled)
+	assert(game.ticks == ticks_before and game.ap == ap_before, "Zooming never spends game time or AP")
+	game.set_map_zoom(1)
+	game.player = Vector2i(1, 1)
+	guard.pos = Vector2i(1, 11)
+	game.focus_contact(guard)
+	var view = Rect2(game.camera, game.map_visible_size())
+	assert(view.has_point(Vector2(game.player) * game.CELL + Vector2(18, 18)) and view.has_point(Vector2(guard.pos) * game.CELL + Vector2(18, 18)), "Long-distance contact frames both actors")
+	for zoom in [0.5, 1.5]:
+		game.new_raid()
+		game.enemies.clear()
+		game.loot.clear()
+		game.player = Vector2i(1, 1)
+		game.set_map_zoom(zoom)
+		game.camera = Vector2.ZERO
+		var press = InputEventMouseButton.new()
+		press.button_index = MOUSE_BUTTON_LEFT
+		press.position = game.ORIGIN + (Vector2(2, 1) * game.CELL + Vector2(18, 18)) * zoom
+		press.pressed = true
+		game._gui_input(press)
+		var release = press.duplicate()
+		release.pressed = false
+		game._gui_input(release)
+		assert(game.player == Vector2i(2, 1) and game.ticks == 1, "Tile input must select the correct cell at either zoom limit")
+	game.new_raid()
+	assert(game.map_zoom == 1)
+	print("PASS: ten-tile sight/detection boundary, weapon ranges and long-distance accuracy, shorter shotgun range, anchored zoom and limits, fixed clipped viewport, no tick/AP cost, contact framing, raid reset")
 	return true

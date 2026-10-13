@@ -11,6 +11,10 @@ var DOORS: Array[Vector2i] = []
 var MAP: Array[String] = []
 const AP_PER_TURN = 4
 const AIM_BONUS = 30
+const SIGHT_RANGE = 10
+const MIN_ZOOM = 0.5
+const MAX_ZOOM = 1.5
+const ZOOM_STEP = 0.125
 const MAP_VIEW_SIZE = Vector2(432, 360)
 const SHOT_PROFILES = [
 	{"name": "BODY", "accuracy": 0},
@@ -18,11 +22,11 @@ const SHOT_PROFILES = [
 	{"name": "BURST", "accuracy": -15}
 ]
 const WEAPONS = [
-	{"name": "PISTOL", "ammo_type": "9mm", "magazine": 7, "damage": 35, "accuracy": 95, "falloff": 8, "range": 6, "ap": 1, "burst": true},
-	{"name": "RIFLE", "ammo_type": "5.56", "magazine": 20, "damage": 40, "accuracy": 95, "falloff": 6, "range": 6, "ap": 1, "burst": true},
-	{"name": "SHOTGUN", "ammo_type": "12GA", "magazine": 6, "damage": 55, "accuracy": 105, "falloff": 15, "range": 4, "ap": 2, "burst": false},
-	{"name": "SNIPER", "ammo_type": "7.62", "magazine": 5, "damage": 65, "accuracy": 95, "falloff": 3, "range": 6, "ap": 2, "burst": false},
-	{"name": "SMG", "ammo_type": ".45", "magazine": 25, "damage": 24, "accuracy": 100, "falloff": 10, "range": 6, "ap": 1, "burst": true}
+	{"name": "PISTOL", "ammo_type": "9mm", "magazine": 7, "damage": 35, "accuracy": 95, "falloff": 5, "range": 10, "ap": 1, "burst": true},
+	{"name": "RIFLE", "ammo_type": "5.56", "magazine": 20, "damage": 40, "accuracy": 95, "falloff": 4, "range": 10, "ap": 1, "burst": true},
+	{"name": "SHOTGUN", "ammo_type": "12GA", "magazine": 6, "damage": 55, "accuracy": 105, "falloff": 10, "range": 6, "ap": 2, "burst": false},
+	{"name": "SNIPER", "ammo_type": "7.62", "magazine": 5, "damage": 65, "accuracy": 95, "falloff": 2, "range": 10, "ap": 2, "burst": false},
+	{"name": "SMG", "ammo_type": ".45", "magazine": 25, "damage": 24, "accuracy": 100, "falloff": 6, "range": 10, "ap": 1, "burst": true}
 ]
 const BLEED_CHANCE = 15
 const BLEED_DAMAGE = 3
@@ -99,6 +103,10 @@ var search_button: Button
 var objective_button: Button
 var map_view: Control
 var camera = Vector2.ZERO
+var map_zoom = 1.0
+var zoom_label: Label
+var zoom_in_button: Button
+var zoom_out_button: Button
 var pointer_down = false
 var pointer_start = Vector2.ZERO
 var pointer_last = Vector2.ZERO
@@ -171,6 +179,11 @@ func make_ui():
 	map_view.clip_contents = true
 	map_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(map_view)
+	zoom_out_button = make_button("−", Vector2(354, 476), zoom_map.bind(-1))
+	zoom_out_button.size = Vector2(44, 40)
+	zoom_in_button = make_button("+", Vector2(406, 476), zoom_map.bind(1))
+	zoom_in_button.size = Vector2(44, 40)
+	zoom_label = make_label(Vector2(302, 480), Vector2(48, 30), 13, Color("eef4df"))
 	title = make_label(Vector2(170, 20), Vector2(140, 32), 16, Color("e7efcf"))
 	title.text = "TD / EXTRACT"
 	gear_button = make_button("INVENTORY", Vector2(24, 20), show_inventory)
@@ -338,6 +351,7 @@ func new_raid():
 	selected = -1
 	message = "Search crates and bodies for gear. Open Inventory to view ammo and use medical items."
 	player_draw_pos = Vector2(player)
+	set_map_zoom(1.0)
 	center_player()
 	refresh()
 
@@ -385,13 +399,13 @@ func line_of_sight(a: Vector2i, b: Vector2i) -> bool:
 
 func player_can_see(p: Vector2i) -> bool:
 	# Stationary loot/objectives cannot lean out from behind their own walls.
-	return distance(player, p) <= 6 and sight_with_peeking(player, p, false)
+	return distance(player, p) <= SIGHT_RANGE and sight_with_peeking(player, p, false)
 
 func objective_visible() -> bool:
 	return not objective_collected and player_can_see(objective)
 
 func visible(e: Dictionary) -> bool:
-	return e.hp > 0 and distance(player, e.pos) <= 6 and line_of_sight(player, e.pos)
+	return e.hp > 0 and distance(player, e.pos) <= SIGHT_RANGE and line_of_sight(player, e.pos)
 
 func cover_at(p: Vector2i, attacker: Vector2i) -> bool:
 	# Only defensive cover affects aim; the shooter can peek over or around it.
@@ -407,7 +421,10 @@ func cover_at(p: Vector2i, attacker: Vector2i) -> bool:
 	return corner_cover_at(p, attacker)
 
 func hit_chance(from: Vector2i, to: Vector2i) -> int:
-	return clampi(95 - distance(from, to) * 8 - (COVER_PENALTY if cover_at(to, from) else 0), 15, 95)
+	return weapon_hit_chance(from, to, WEAPONS[0])
+
+func weapon_hit_chance(from: Vector2i, to: Vector2i, weapon: Dictionary) -> int:
+	return clampi(weapon.accuracy - distance(from, to) * weapon.falloff - (COVER_PENALTY if cover_at(to, from) else 0), 15, 95)
 
 func path_to(target: Vector2i) -> Array[Vector2i]:
 	var frontier: Array[Vector2i] = [player]
@@ -436,10 +453,7 @@ func _gui_input(event):
 	var bounds = Rect2(ORIGIN, MAP_VIEW_SIZE)
 	if event is InputEventMouseButton:
 		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and event.pressed and bounds.has_point(event.position):
-			var amount = -CELL * 2 if event.button_index == MOUSE_BUTTON_WHEEL_UP else CELL * 2
-			camera += Vector2(amount, 0) if event.shift_pressed else Vector2(0, amount)
-			clamp_camera()
-			map_view.queue_redraw()
+			set_map_zoom(map_zoom + (ZOOM_STEP if event.button_index == MOUSE_BUTTON_WHEEL_UP else -ZOOM_STEP), event.position - ORIGIN)
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed and bounds.has_point(event.position):
 				pointer_down = true
@@ -449,12 +463,12 @@ func _gui_input(event):
 			elif not event.pressed and pointer_down:
 				pointer_down = false
 				if not pointer_dragged and bounds.has_point(event.position) and not finished:
-					select_tile(Vector2i((event.position - ORIGIN + camera) / CELL))
+					select_tile(Vector2i(((event.position - ORIGIN) / map_zoom + camera) / CELL))
 	elif event is InputEventMouseMotion and pointer_down:
 		if event.position.distance_to(pointer_start) > 8:
 			pointer_dragged = true
 		if pointer_dragged:
-			camera -= event.position - pointer_last
+			camera -= (event.position - pointer_last) / map_zoom
 			clamp_camera()
 			map_view.queue_redraw()
 		pointer_last = event.position
@@ -521,7 +535,7 @@ func move_to(target: Vector2i):
 				break
 		if not combat:
 			world_tick()
-		if not Rect2(camera, MAP_VIEW_SIZE).has_point(Vector2(player) * CELL + Vector2(18, 18)):
+		if not Rect2(camera, map_visible_size()).has_point(Vector2(player) * CELL + Vector2(18, 18)):
 			center_player()
 		if not await animate_motion() or epoch != motion_epoch:
 			return
@@ -533,7 +547,7 @@ func move_to(target: Vector2i):
 		if (not was_combat and combat) or gun_dialog.visible or finished:
 			break
 	movement_active = false
-	if not Rect2(camera, MAP_VIEW_SIZE).has_point(Vector2(player) * CELL + Vector2(18, 18)):
+	if not Rect2(camera, map_visible_size()).has_point(Vector2(player) * CELL + Vector2(18, 18)):
 		center_player()
 	refresh()
 
@@ -647,7 +661,9 @@ func world_tick():
 
 func focus_contact(e: Dictionary):
 	selected = enemies.find(e)
-	camera = (Vector2(player) + Vector2(e.pos)) * CELL / 2 + Vector2(18, 18) - MAP_VIEW_SIZE / 2
+	var span = Vector2((Vector2i(e.pos) - player).abs()) * CELL + Vector2.ONE * CELL * 3
+	set_map_zoom(minf(map_zoom, minf(MAP_VIEW_SIZE.x / span.x, MAP_VIEW_SIZE.y / span.y)))
+	camera = (Vector2(player) + Vector2(e.pos)) * CELL / 2 + Vector2(18, 18) - map_visible_size() / 2
 	clamp_camera()
 	map_view.queue_redraw()
 
@@ -659,7 +675,7 @@ func choose_shot(mode: int):
 
 func shot_chance(target: Vector2i) -> int:
 	var weapon = weapon_profile()
-	var base = clampi(weapon.accuracy - distance(player, target) * weapon.falloff - (COVER_PENALTY if cover_at(target, player) else 0), 15, 95)
+	var base = weapon_hit_chance(player, target, weapon)
 	return clampi(base + SHOT_PROFILES[shot_mode].accuracy + (AIM_BONUS if aiming else 0), 5, 95)
 
 func aim_weapon():
@@ -882,7 +898,7 @@ func enemy_turn():
 					continue
 				actions -= enemy_weapon.ap - 1
 				e.ammo -= 1
-				var chance = clampi(enemy_weapon.accuracy - distance(e.pos, player) * enemy_weapon.falloff - (COVER_PENALTY if cover_at(player, e.pos) else 0), 15, 95)
+				var chance = weapon_hit_chance(e.pos, player, enemy_weapon)
 				if rng.randi_range(1, 100) <= chance:
 					var dealt = roundi(enemy_weapon.damage / 3.0)
 					take_damage(dealt)
@@ -998,7 +1014,7 @@ func _draw():
 
 func draw_map(canvas: Control):
 	var first = Vector2i(camera / CELL)
-	var last = Vector2i((camera + MAP_VIEW_SIZE) / CELL) + Vector2i.ONE
+	var last = Vector2i((camera + map_visible_size()) / CELL) + Vector2i.ONE
 	for y in range(maxi(0, first.y), mini(MAP.size(), last.y)):
 		for x in range(maxi(0, first.x), mini(MAP[0].length(), last.x)):
 			var p = Vector2i(x, y)
@@ -1099,12 +1115,32 @@ func is_indoors(p: Vector2i) -> bool:
 			return true
 	return false
 
+func map_visible_size() -> Vector2:
+	return MAP_VIEW_SIZE / map_zoom
+
+func zoom_map(direction: int):
+	set_map_zoom(map_zoom + direction * ZOOM_STEP)
+
+func set_map_zoom(value: float, anchor: Vector2 = Vector2(-1, -1)):
+	if anchor.x < 0:
+		anchor = MAP_VIEW_SIZE / 2
+	var world_anchor = camera + anchor / map_zoom
+	map_zoom = clampf(value, MIN_ZOOM, MAX_ZOOM)
+	map_view.scale = Vector2.ONE * map_zoom
+	map_view.size = map_visible_size()
+	camera = world_anchor - anchor / map_zoom
+	clamp_camera()
+	zoom_label.text = "%d%%" % roundi(map_zoom * 100)
+	zoom_in_button.disabled = map_zoom >= MAX_ZOOM
+	zoom_out_button.disabled = map_zoom <= MIN_ZOOM
+	map_view.queue_redraw()
+
 func clamp_camera():
-	camera.x = clampf(camera.x, 0, MAP[0].length() * CELL - 432)
-	camera.y = clampf(camera.y, 0, MAP.size() * CELL - MAP_VIEW_SIZE.y)
+	camera.x = clampf(camera.x, 0, maxf(0, MAP[0].length() * CELL - map_visible_size().x))
+	camera.y = clampf(camera.y, 0, maxf(0, MAP.size() * CELL - map_visible_size().y))
 
 func center_player():
-	camera = Vector2(player) * CELL + Vector2(18, 18) - MAP_VIEW_SIZE / 2
+	camera = Vector2(player) * CELL + Vector2(18, 18) - map_visible_size() / 2
 	clamp_camera()
 	if is_instance_valid(map_view):
 		map_view.queue_redraw()
@@ -1112,7 +1148,7 @@ func center_player():
 func center_objective():
 	if not objective_collected and not objective_visible():
 		return
-	camera = Vector2(exfil if objective_collected else objective) * CELL + Vector2(18, 18) - MAP_VIEW_SIZE / 2
+	camera = Vector2(exfil if objective_collected else objective) * CELL + Vector2(18, 18) - map_visible_size() / 2
 	clamp_camera()
 	map_view.queue_redraw()
 

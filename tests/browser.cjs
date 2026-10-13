@@ -50,10 +50,17 @@ const { chromium } = require('playwright');
       await page.mouse.wheel(0,-288);
       await page.waitForTimeout(150);
       const wheelUp = await canvas.screenshot();
-      if(wheelBefore.equals(wheelDown) && wheelDown.equals(wheelUp)) throw Error('Mouse wheel scrolling failed');
+      if(wheelBefore.equals(wheelDown) && wheelDown.equals(wheelUp)) throw Error('Mouse wheel zoom failed');
       if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Mouse wheel advanced the world');
     }
 
+    const zoomBefore = await canvas.screenshot();
+    await tapLogical(376,496);
+    const zoomOut = await canvas.screenshot();
+    if(zoomBefore.equals(zoomOut)) throw Error('Zoom-out button failed');
+    await tapLogical(428,496);
+    if(zoomOut.equals(await canvas.screenshot())) throw Error('Zoom-in button failed');
+    if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Zoom buttons spent game time or AP');
     const bodyPreview = await canvas.screenshot();
     async function tapLogical(x,y) {
       if(touch) await page.touchscreen.tap(offsetX+x*scale,offsetY+y*scale);
@@ -112,7 +119,7 @@ const { chromium } = require('playwright');
     if (idle.equals(await canvas.screenshot())) throw Error('New Raid input failed');
     if (failures.length) throw Error(failures.join('\n'));
     await page.screenshot({path:`build/web/${touch ? 'touch' : 'mouse'}-smoke.png`});
-    console.log(`PASS: WebAssembly startup, ${touch ? 'touch' : 'mouse'} drag panning without advancing time, shot-mode controls, inventory open/close and medical controls without spending time/AP, disabled unnecessary bandaging, grid input, idle freeze, new raid, no browser/script errors`);
+    console.log(`PASS: WebAssembly startup, ${touch ? 'touch' : 'mouse'} drag panning without advancing time, zoom buttons without advancing time, shot-mode controls, inventory open/close and medical controls without spending time/AP, disabled unnecessary bandaging, grid input, idle freeze, new raid, no browser/script errors`);
     await context.close();
   }
   await browser.close();
