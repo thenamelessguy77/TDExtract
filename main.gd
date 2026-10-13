@@ -442,8 +442,10 @@ func visible(e: Dictionary) -> bool:
 	return e.hp > 0 and distance(player, e.pos) <= SIGHT_RANGE and line_of_sight(player, e.pos)
 
 func cover_at(p: Vector2i, attacker: Vector2i) -> bool:
-	# Only defensive cover affects aim; the shooter can peek over or around it.
-	# Low barriers protect their facing side; full walls protect exposed corners.
+	return low_cover_at(p, attacker) or corner_cover_at(p, attacker)
+
+func low_cover_at(p: Vector2i, attacker: Vector2i) -> bool:
+	# Low barriers protect only the side facing the observer.
 	var delta = attacker - p
 	for direction in DIRS:
 		if tile_at(p + direction) != "=" or delta.x * direction.x + delta.y * direction.y <= 0:
@@ -452,7 +454,7 @@ func cover_at(p: Vector2i, attacker: Vector2i) -> bool:
 			return true
 		if direction.y != 0 and absi(delta.y) >= absi(delta.x):
 			return true
-	return corner_cover_at(p, attacker)
+	return false
 
 func hit_chance(from: Vector2i, to: Vector2i) -> int:
 	return weapon_hit_chance(from, to, WEAPONS[0])
@@ -651,6 +653,8 @@ func facing_toward(delta: Vector2i) -> Vector2i:
 
 func enemy_can_see_player(e: Dictionary) -> bool:
 	if not visible(e):
+		return false
+	if not combat and not e.get("alerted", false) and low_cover_at(player, e.pos):
 		return false
 	var delta = player - Vector2i(e.pos)
 	var facing = Vector2i(e.get("facing", Vector2i.LEFT))

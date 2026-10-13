@@ -99,6 +99,7 @@ func run():
 	assert(test_weapons(game), "Weapon checks must complete")
 	assert(test_gear_loot_and_persistence(game), "Typed ammo and persistent gun checks must complete")
 	assert(await test_bleeding_and_bandages(game), "Bleeding and bandage checks must complete")
+	assert(test_half_cover_hiding(game), "Half-cover concealment checks must complete")
 	assert(test_enemy_ai(game), "Enemy AI checks must complete")
 	assert(test_sight_and_zoom(game), "Sight and zoom checks must complete")
 	assert(await test_animated_movement(game), "Animated movement checks must complete")
@@ -320,7 +321,9 @@ func test_objective_facing_loot(game) -> bool:
 	game.enemies.clear()
 	game.player = Vector2i(3, 10)
 	guard = {"pos": Vector2i(3, 8), "hp": 60, "facing": Vector2i.DOWN}
-	assert(game.enemy_can_see_player(guard), "Forward sight passes over low cover")
+	assert(not game.enemy_can_see_player(guard), "Unspotted player hides behind adjacent low cover")
+	game.combat = true
+	assert(game.enemy_can_see_player(guard), "Combat sight passes over low cover")
 	game.player = Vector2i(13, 4)
 	guard = {"pos": Vector2i(15, 4), "hp": 60, "facing": Vector2i.LEFT}
 	assert(not game.enemy_can_see_player(guard), "Full walls still block facing-based detection")
@@ -1377,4 +1380,39 @@ func test_shot_meter(game) -> bool:
 	game.resolve_shot_meter()
 	assert(not game.meter_active and not game.meter_overlay.visible and game.ticks == 0 and game.ap == 4)
 	print("PASS: moving randomized shot meter, frozen world and locked input, green/yellow/red accuracy modifiers and caps, mouse/keyboard commit, single-resolution ammo/AP costs, whole-burst modifier, invalid targets/empty guns, raid reset")
+	return true
+
+func test_half_cover_hiding(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	var original_map = game.MAP.duplicate()
+	game.MAP = ["#########", "#.......#", "#.......#", "#..=....#", "#.......#", "#.......#", "#########"] as Array[String]
+	game.player = Vector2i(3, 4)
+	var guard = {"pos": Vector2i(3, 1), "hp": 60, "facing": Vector2i.DOWN}
+	game.enemies.append(guard)
+	assert(game.visible(guard), "Player can still see over half cover")
+	assert(not game.enemy_can_see_player(guard), "Unaware guard cannot spot player behind adjacent half cover")
+	guard.investigating = true
+	assert(not game.enemy_can_see_player(guard), "Hearing a shot alone does not reveal a concealed player")
+	guard.pos = Vector2i(6, 4)
+	guard.facing = Vector2i.LEFT
+	assert(game.enemy_can_see_player(guard), "Flanking reveals the exposed player")
+	guard.pos = Vector2i(3, 1)
+	guard.facing = Vector2i.DOWN
+	game.player = Vector2i(3, 5)
+	assert(game.enemy_can_see_player(guard), "Cover must be directly adjacent")
+	game.player = Vector2i(3, 4)
+	guard.alerted = true
+	assert(game.enemy_can_see_player(guard), "Already alerted guards are not fooled by low cover")
+	guard.alerted = false
+	game.combat = true
+	assert(game.enemy_can_see_player(guard), "Combat preserves normal sight over low cover")
+	assert(game.cover_at(game.player, guard.pos), "Defensive bonus remains in combat")
+	game.combat = false
+	game.selected = 0
+	game.shoot()
+	assert(game.combat and guard.alerted and game.enemy_can_see_player(guard), "Firing reveals the hidden player")
+	game.MAP = original_map
+	game.new_raid()
+	print("PASS: automatic half-cover concealment, directional flanking, adjacency, player visibility, investigation, alerted/combat visibility and defensive cover")
 	return true
