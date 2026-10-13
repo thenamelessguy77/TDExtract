@@ -54,6 +54,8 @@ const { chromium } = require('playwright');
       if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Mouse wheel advanced the world');
     }
 
+    await tapLogical(98,496);
+    if(!hudBefore.equals(await page.screenshot({clip:hudClip}))) throw Error('Unavailable takedown spent a tick or AP');
     const zoomBefore = await canvas.screenshot();
     await tapLogical(376,496);
     const zoomOut = await canvas.screenshot();
@@ -119,7 +121,7 @@ const { chromium } = require('playwright');
     if (idle.equals(await canvas.screenshot())) throw Error('New Raid input failed');
     if (failures.length) throw Error(failures.join('\n'));
     await page.screenshot({path:`build/web/${touch ? 'touch' : 'mouse'}-smoke.png`});
-    console.log(`PASS: WebAssembly startup, ${touch ? 'touch' : 'mouse'} drag panning without advancing time, zoom buttons without advancing time, shot-mode controls, inventory open/close and medical controls without spending time/AP, disabled unnecessary bandaging, grid input, idle freeze, new raid, no browser/script errors`);
+    console.log(`PASS: WebAssembly startup, ${touch ? 'touch' : 'mouse'} drag panning without advancing time, zoom buttons and unavailable takedown without advancing time, shot-mode controls, inventory open/close and medical controls without spending time/AP, disabled unnecessary bandaging, grid input, idle freeze, new raid, no browser/script errors`);
     await context.close();
   }
   await browser.close();

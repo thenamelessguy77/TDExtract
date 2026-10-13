@@ -12,6 +12,9 @@ var MAP: Array[String] = []
 const AP_PER_TURN = 4
 const AIM_BONUS = 30
 const SIGHT_RANGE = 10
+const HEARING_RANGE = 12
+const INVESTIGATION_ACTIONS = 32
+const SEARCH_ACTIONS = 4
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 1.5
 const ZOOM_STEP = 0.125
@@ -104,6 +107,7 @@ var objective_button: Button
 var map_view: Control
 var camera = Vector2.ZERO
 var map_zoom = 1.0
+var takedown_button: Button
 var zoom_label: Label
 var zoom_in_button: Button
 var zoom_out_button: Button
@@ -179,6 +183,9 @@ func make_ui():
 	map_view.clip_contents = true
 	map_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(map_view)
+	takedown_button = make_button("TAKEDOWN", Vector2(30, 476), takedown_nearby)
+	takedown_button.size = Vector2(136, 40)
+	takedown_button.add_theme_font_size_override("font_size", 14)
 	zoom_out_button = make_button("−", Vector2(354, 476), zoom_map.bind(-1))
 	zoom_out_button.size = Vector2(44, 40)
 	zoom_in_button = make_button("+", Vector2(406, 476), zoom_map.bind(1))
@@ -488,6 +495,10 @@ func select_tile(target: Vector2i):
 			return
 		if visible(enemies[i]):
 			selected = i
+			if can_takedown(i):
+				message = "Unaware guard: TAKEDOWN costs 1 tick; FIRE starts combat."
+				refresh()
+				return
 			enter_combat()
 			message = "Target acquired. Fire to engage, or reposition behind cover."
 			refresh()
@@ -622,6 +633,7 @@ func enemy_can_see_player(e: Dictionary) -> bool:
 
 func spot_player(e: Dictionary):
 	e.alerted = true
+	e.investigating = false
 	e.last_seen = player
 
 func patrol_step(e: Dictionary):
@@ -630,11 +642,127 @@ func patrol_step(e: Dictionary):
 		var next = e.pos + direction
 		if walkable(next) and not occupied(next) and next != player and next != exfil:
 			options.append(direction)
-	if not options.is_empty():
-		var direction = options[rng.randi_range(0, options.size() - 1)]
-		e.facing = direction
-		e.pos += direction
-		record_enemy_motion(e)
+	if options.is_empty():
+		return
+	var heading = Vector2i(e.get("facing", Vector2i.LEFT))
+	var remaining = int(e.get("patrol_remaining", 0))
+	if remaining <= 0 and e.get("patrol_started", false) and not e.get("patrol_pause", false):
+		e.patrol_pause = true
+		return
+	var direction = heading
+	if not options.has(heading) or remaining <= 0:
+		var choices: Array[Vector2i] = []
+		for option in options:
+			if option != -heading:
+				choices.append(option)
+		if choices.is_empty():
+			choices = options
+		# Favor continuing straight when choosing the next short patrol leg.
+		direction = heading if choices.has(heading) and rng.randf() < 0.65 else choices[rng.randi_range(0, choices.size() - 1)]
+		remaining = rng.randi_range(3, 6)
+	e.patrol_remaining = remaining - 1
+	e.patrol_started = true
+	e.patrol_pause = false
+	e.facing = direction
+	e.pos += direction
+	record_enemy_motion(e)
+
+func hear_gunshot(origin: Vector2i, shooter: Dictionary = {}):
+	for e in enemies:
+		if e.hp <= 0 or e == shooter or e.get("alerted", false) or distance(e.pos, origin) > HEARING_RANGE:
+			continue
+		begin_investigation(e, origin)
+
+func begin_investigation(e: Dictionary, origin: Vector2i):
+	e.investigating = true
+	e.investigate_pos = origin
+	e.investigate_remaining = INVESTIGATION_ACTIONS
+	e.search_remaining = SEARCH_ACTIONS
+	e.patrol_remaining = 0
+	e.patrol_started = false
+	e.patrol_pause = false
+
+func guard_route_step(e: Dictionary, target: Vector2i) -> Vector2i:
+	var frontier: Array[Vector2i] = [e.pos]
+	var parents = {e.pos: e.pos}
+	var endpoint = Vector2i(-1, -1)
+	while not frontier.is_empty():
+		var p = frontier.pop_front()
+		if distance(p, target) <= 1:
+			endpoint = p
+			break
+		var directions = DIRS.duplicate()
+		# Prefer the current heading on equally short routes.
+		var heading = Vector2i(e.get("facing", Vector2i.LEFT))
+		directions.erase(heading)
+		directions.push_front(heading)
+		for direction in directions:
+			var next = p + direction
+			if walkable(next) and not parents.has(next) and not occupied(next) and next != player:
+				parents[next] = p
+				frontier.append(next)
+	if endpoint == Vector2i(-1, -1) or endpoint == e.pos:
+		return e.pos
+	var cursor = endpoint
+	while parents[cursor] != e.pos:
+		cursor = parents[cursor]
+	return cursor
+
+func investigation_step(e: Dictionary):
+	var target = Vector2i(e.get("investigate_pos", e.pos))
+	e.investigate_remaining = int(e.get("investigate_remaining", INVESTIGATION_ACTIONS)) - 1
+	if distance(e.pos, target) <= 1:
+		var remaining = int(e.get("search_remaining", SEARCH_ACTIONS))
+		e.facing = facing_toward(target - Vector2i(e.pos)) if remaining == SEARCH_ACTIONS else Vector2i(-e.facing.y, e.facing.x)
+		e.search_remaining = remaining - 1
+	else:
+		var next = guard_route_step(e, target)
+		if next != e.pos:
+			e.facing = facing_toward(next - Vector2i(e.pos))
+			e.pos = next
+			record_enemy_motion(e)
+	if int(e.investigate_remaining) <= 0 or int(e.get("search_remaining", SEARCH_ACTIONS)) <= 0:
+		e.investigating = false
+		e.alerted = false
+		e.patrol_remaining = 0
+		e.patrol_started = false
+		e.patrol_pause = false
+
+func can_takedown(index: int) -> bool:
+	if busy() or finished or combat or gun_dialog.visible or index < 0 or index >= enemies.size():
+		return false
+	var e = enemies[index]
+	return e.hp > 0 and not e.get("alerted", false) and player == Vector2i(e.pos) - Vector2i(e.get("facing", Vector2i.LEFT)) and not enemies.any(func(guard): return enemy_can_see_player(guard))
+
+func nearby_takedown() -> int:
+	if can_takedown(selected):
+		return selected
+	for i in range(enemies.size()):
+		if can_takedown(i):
+			return i
+	return -1
+
+func takedown_nearby():
+	silent_takedown(nearby_takedown())
+
+func silent_takedown(index: int):
+	if not can_takedown(index):
+		return
+	begin_motion()
+	var e = enemies[index]
+	e.hp = 0
+	e.alerted = false
+	e.investigating = false
+	e.loot_kind = rng.randi_range(0, 3)
+	e.searched = false
+	selected = -1
+	aiming = false
+	ticks += 1
+	message = "Silent takedown. One world tick elapsed. Search the body for gear."
+	world_tick()
+	if not await animate_motion():
+		return
+	refresh()
 
 func world_tick():
 	advance_bleeding()
@@ -648,7 +776,10 @@ func world_tick():
 	for e in enemies:
 		# A guard that sees the operator reacts in place instead of wandering away.
 		if e.hp > 0 and not spotted_guards.has(e):
-			patrol_step(e)
+			if e.get("investigating", false):
+				investigation_step(e)
+			else:
+				patrol_step(e)
 	for e in enemies:
 		if enemy_can_see_player(e):
 			spot_player(e)
@@ -687,16 +818,19 @@ func aim_weapon():
 	refresh()
 
 func can_fire() -> bool:
-	return not busy() and not gun_dialog.visible and not finished and combat and ap >= attack_ap() and (shot_mode != 2 or weapon_profile().burst) and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected]) and distance(player, enemies[selected].pos) <= weapon_profile().range
+	return not busy() and not gun_dialog.visible and not finished and (ap if combat else AP_PER_TURN) >= attack_ap() and (shot_mode != 2 or weapon_profile().burst) and ammo >= (2 if shot_mode == 2 else 1) and selected >= 0 and selected < enemies.size() and visible(enemies[selected]) and distance(player, enemies[selected].pos) <= weapon_profile().range
 
 func shoot():
 	if not can_fire():
 		return
+	if not combat:
+		enter_combat()
 	var enemy = enemies[selected]
 	var profile = SHOT_PROFILES[shot_mode]
 	var chance = shot_chance(enemy.pos)
 	var rounds = mini(ammo, rng.randi_range(2, 3)) if shot_mode == 2 else 1
 	spot_player(enemy)
+	hear_gunshot(player)
 	ap -= attack_ap()
 	ammo -= rounds
 	var hits = 0
@@ -898,6 +1032,7 @@ func enemy_turn():
 					continue
 				actions -= enemy_weapon.ap - 1
 				e.ammo -= 1
+				hear_gunshot(e.pos, e)
 				var chance = weapon_hit_chance(e.pos, player, enemy_weapon)
 				if rng.randi_range(1, 100) <= chance:
 					var dealt = roundi(enemy_weapon.damage / 3.0)
@@ -905,16 +1040,15 @@ func enemy_turn():
 					damage += dealt
 			elif e.get("alerted", false):
 				var target = Vector2i(e.get("last_seen", e.pos))
-				var best = e.pos
-				for d in DIRS:
-					var next = e.pos + d
-					if walkable(next) and not occupied(next) and next != player and distance(next, target) < distance(best, target):
-						best = next
-				e.facing = facing_toward(best - Vector2i(e.pos)) if best != e.pos else facing_toward(target - Vector2i(e.pos))
-				e.pos = best
+				var next = guard_route_step(e, target)
+				e.facing = facing_toward(next - Vector2i(e.pos)) if next != e.pos else facing_toward(target - Vector2i(e.pos))
+				e.pos = next
 				record_enemy_motion(e)
+			elif e.get("investigating", false):
+				investigation_step(e)
 			else:
 				patrol_step(e)
+
 	ap = AP_PER_TURN
 	ticks += 1
 	message = "Enemy turn: %d damage. Your turn." % damage
@@ -925,7 +1059,9 @@ func enemy_turn():
 		combat = false
 		selected = -1
 		for e in enemies:
-			e.alerted = false
+			if e.hp > 0 and e.get("alerted", false):
+				begin_investigation(e, Vector2i(e.get("last_seen", e.pos)))
+				e.alerted = false
 		message = "Contact broken. Exploration resumes; patrols advance when you move."
 	if combat and not finished:
 		for e in enemies:
@@ -980,6 +1116,10 @@ func refresh():
 		intel.text += "\n%s %d HP • HIT %d%%%s" % [WEAPONS[int(enemies[selected].get("weapon_id", 0))].name, enemies[selected].hp, shot_chance(enemies[selected].pos), " • OUT OF RANGE" if distance(player, enemies[selected].pos) > weapon_profile().range else (" • COVER" if cover_at(enemies[selected].pos, player) else "")]
 	else:
 		intel.text += "\nPurple: objective • Green: exfil • Arrows: facing"
+	takedown_button.disabled = nearby_takedown() < 0
+	takedown_button.tooltip_text = "Silent takedown: directly behind an unaware guard, 1 tick outside combat."
+	if not takedown_button.disabled:
+		intel.text = intel.text.get_slice("\n", 0) + "\nTAKEDOWN READY • 1 tick • Tap button"
 	feed.text = message
 	var profile = SHOT_PROFILES[shot_mode]
 	shot_info.text = "%s • %d AP • %d dmg%s" % [profile.name, attack_ap(), attack_damage(), "/round" if shot_mode == 2 else ""]
@@ -1047,7 +1187,7 @@ func draw_map(canvas: Control):
 		if not visible(e) and not (animation_running and e.get("motion_visible", false)):
 			continue
 		var center = Vector2(e.get("draw_pos", Vector2(e.pos))) * CELL - camera + Vector2(17, 17)
-		canvas.draw_circle(center, 11, Color("c97061"))
+		canvas.draw_circle(center, 11, Color("d6ad58") if e.get("investigating", false) else Color("c97061"))
 		var forward = Vector2(e.get("draw_facing", e.get("facing", Vector2i.LEFT)))
 		var side = Vector2(-forward.y, forward.x)
 		canvas.draw_colored_polygon(PackedVector2Array([center + forward * 14, center + forward * 4 + side * 5, center + forward * 4 - side * 5]), Color("fff0c0"))

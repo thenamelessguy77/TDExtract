@@ -99,6 +99,7 @@ func run():
 	assert(test_weapons(game), "Weapon checks must complete")
 	assert(test_gear_loot_and_persistence(game), "Typed ammo and persistent gun checks must complete")
 	assert(await test_bleeding_and_bandages(game), "Bleeding and bandage checks must complete")
+	assert(test_enemy_ai(game), "Enemy AI checks must complete")
 	assert(test_sight_and_zoom(game), "Sight and zoom checks must complete")
 	assert(await test_animated_movement(game), "Animated movement checks must complete")
 	print("PASS: randomized placements, idle freeze, movement ticks, loot, contact interruption, AP, enemy turn, LOS, cover, range, shooting, reloading, extraction, death, 100 raid seeds")
@@ -1032,6 +1033,9 @@ func test_animated_movement(game) -> bool:
 	var guard = {"pos": Vector2i(3, 2), "hp": 60, "facing": Vector2i.RIGHT}
 	game.enemies.append(guard)
 	game.animations_enabled = true
+	# Finish the long synchronous mechanics checks before measuring a short tween.
+	await process_frame
+	await process_frame
 	game.move_to(Vector2i(2, 1))
 	assert(game.busy() and game.ticks == 1 and game.player_draw_pos == Vector2(1, 1))
 	assert(guard.draw_pos == Vector2(3, 2) and guard.pos != Vector2i(3, 2), "Actors start the same tick from their original positions")
@@ -1139,4 +1143,128 @@ func test_sight_and_zoom(game) -> bool:
 	game.new_raid()
 	assert(game.map_zoom == 1)
 	print("PASS: ten-tile sight/detection boundary, weapon ranges and long-distance accuracy, shorter shotgun range, anchored zoom and limits, fixed clipped viewport, no tick/AP cost, contact framing, raid reset")
+	return true
+
+func test_enemy_ai(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	var target = {"pos": Vector2i(4, 1), "hp": 1000, "facing": Vector2i.RIGHT}
+	var near = {"pos": Vector2i(13, 1), "hp": 60, "facing": Vector2i.RIGHT}
+	var far = {"pos": Vector2i(14, 1), "hp": 60, "facing": Vector2i.RIGHT}
+	game.enemies.assign([target, near, far])
+	game.combat = true
+	game.selected = 0
+	game.shoot()
+	assert(near.investigating and near.investigate_pos == game.player and not near.get("alerted", false))
+	assert(not far.get("investigating", false), "Gunshots reach twelve Manhattan tiles, not thirteen")
+	assert(target.alerted and not target.get("investigating", false), "Visual/engaged contact has priority over noise")
+	game.new_raid()
+	game.enemies.clear()
+	game.player = Vector2i(40, 40)
+	var investigator = {"pos": Vector2i(13, 4), "hp": 60, "facing": Vector2i.LEFT}
+	game.enemies.append(investigator)
+	assert(not game.line_of_sight(investigator.pos, Vector2i(15, 4)))
+	game.hear_gunshot(Vector2i(15, 4))
+	assert(investigator.investigating, "Walls block sight but do not silence nearby gunshots")
+	var crossed_door = false
+	for i in range(20):
+		if not investigator.investigating:
+			break
+		game.world_tick()
+		crossed_door = crossed_door or investigator.pos == Vector2i(14, 6)
+		assert(game.walkable(investigator.pos))
+	assert(crossed_door and not investigator.investigating and not investigator.get("alerted", false), "Investigations navigate the entrance, look around, and expire")
+	var old_pos = investigator.pos
+	game.world_tick()
+	assert(investigator.pos != old_pos, "A finished search resumes patrol")
+	investigator.pos = Vector2i(13, 4)
+	game.begin_investigation(investigator, Vector2i(15, 4))
+	investigator.investigate_remaining = 1
+	game.set_tile(Vector2i(14, 6), "#")
+	game.investigation_step(investigator)
+	game.set_tile(Vector2i(14, 6), ".")
+	assert(not investigator.investigating, "Unreachable noise cannot trap guards investigating forever")
+	game.enemies.clear()
+	var remembered = {"pos": Vector2i(11, 1), "hp": 60, "facing": Vector2i.RIGHT, "alerted": true, "last_seen": Vector2i(7, 1), "ammo": 7, "reserve": 0}
+	game.enemies.append(remembered)
+	game.combat = true
+	game.enemy_turn()
+	assert(not game.combat and remembered.investigating and remembered.investigate_pos == Vector2i(7, 1), "Breaking contact investigates remembered position without tracking the unseen player")
+	# Enemy shots emit the same audible event as player shots.
+	game.enemies.clear()
+	game.player = Vector2i(1, 1)
+	var shooter = {"pos": Vector2i(2, 1), "hp": 1000, "facing": Vector2i.LEFT, "ammo": 7, "reserve": 0}
+	var listener = {"pos": Vector2i(14, 1), "hp": 60, "facing": Vector2i.RIGHT}
+	game.enemies.assign([shooter, listener])
+	game.combat = true
+	game.hp = 100
+	game.bleeding = false
+	game.bleed_rng.seed = safe_bleed_seed()
+	game.enemy_turn()
+	assert(listener.investigating and listener.investigate_pos == Vector2i(2, 1))
+	# A patrol leg stays straight until its budget expires or an obstruction intervenes.
+	game.enemies.clear()
+	game.player = Vector2i(40, 40)
+	var patrol = {"pos": Vector2i(1, 1), "hp": 60, "facing": Vector2i.RIGHT, "patrol_remaining": 3}
+	game.enemies.append(patrol)
+	for i in range(3):
+		game.patrol_step(patrol)
+		assert(patrol.pos == Vector2i(2 + i, 1) and patrol.facing == Vector2i.RIGHT)
+	patrol.pos = Vector2i(2, 2)
+	patrol.facing = Vector2i.RIGHT
+	patrol.patrol_remaining = 5
+	game.patrol_step(patrol)
+	assert(game.walkable(patrol.pos) and patrol.facing in [Vector2i.UP, Vector2i.DOWN], "Blocked patrols turn without reversing when a side path exists")
+	var chosen_headings = {}
+	for seed_value in range(30):
+		game.rng.seed = seed_value
+		patrol.pos = Vector2i(10, 2)
+		patrol.facing = Vector2i.RIGHT
+		patrol.patrol_remaining = 0
+		patrol.patrol_started = false
+		game.patrol_step(patrol)
+		chosen_headings[patrol.facing] = true
+	assert(chosen_headings.size() > 1, "Patrol choices remain randomized")
+	# Silent takedown uses one tick, leaves actual enemy gear, and creates no sound.
+	game.new_raid()
+	game.enemies.clear()
+	game.loot.clear()
+	game.player = Vector2i(1, 1)
+	var unaware = {"pos": Vector2i(3, 1), "hp": 60, "facing": Vector2i.RIGHT, "weapon_id": 4, "ammo": 8, "reserve": 11, "gun_available": true, "patrol_remaining": 0, "patrol_started": true}
+	var observer = {"pos": Vector2i(10, 1), "hp": 60, "facing": Vector2i.RIGHT, "patrol_remaining": 4}
+	game.enemies.assign([unaware, observer])
+	game.move_to(Vector2i(2, 1))
+	assert(unaware.pos == Vector2i(3, 1) and unaware.patrol_pause and game.can_takedown(0), "Patrol pauses allow an undetected rear approach")
+	var takedown_tick = game.ticks
+	game.select_tile(unaware.pos)
+	assert(not game.combat and game.selected == 0 and not game.takedown_button.disabled and game.can_fire(), "Selecting an unaware rear target offers either silent or firearm attack")
+	var ammo_before = game.ammo
+	game.takedown_button.pressed.emit()
+	assert(unaware.hp == 0 and unaware.ammo == 8 and unaware.reserve == 11 and not unaware.searched)
+	assert(game.ticks == takedown_tick + 1 and game.ammo == ammo_before and not game.combat and not observer.get("investigating", false))
+	game.silent_takedown(0)
+	assert(game.ticks == takedown_tick + 1, "A dead guard cannot be taken down twice")
+	unaware.hp = 60
+	unaware.alerted = false
+	game.player = Vector2i(3, 2)
+	assert(not game.can_takedown(0), "Side adjacency is not behind")
+	game.player = Vector2i(2, 1)
+	game.combat = true
+	assert(not game.can_takedown(0))
+	game.combat = false
+	unaware.alerted = true
+	assert(not game.can_takedown(0))
+	unaware.alerted = false
+	observer.pos = Vector2i(1, 1)
+	observer.facing = Vector2i.RIGHT
+	assert(not game.can_takedown(0), "Another watching guard prevents an undetected takedown")
+	observer.hp = 0
+	game.selected = 0
+	game.ap = 0
+	game.shoot()
+	assert(game.combat and game.ap == 3 and game.ammo == ammo_before - 1, "Choosing Fire explicitly starts combat with normal shot costs")
+	game.new_raid()
+	print("PASS: player/enemy gunshot hearing and range, wall-independent sound, route-based investigation/search/expiry, unreachable timeout, remembered contact, straight randomized patrol legs and blocked turns, silent rear takedown cost/gear/noise, invalid takedowns")
 	return true
