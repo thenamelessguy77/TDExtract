@@ -80,6 +80,7 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_automatic_combat_end(game), "Automatic combat exit checks must complete")
 	assert(test_corner_peeking(game), "Peeking checks must complete")
 	assert(test_full_wall_corners(game), "Corner-cover checks must complete")
 	assert(test_combat_options(game), "Expanded combat tests must complete")
@@ -564,4 +565,46 @@ func test_corner_peeking(game) -> bool:
 	assert(game.line_of_sight(Vector2i(2, 3), Vector2i(5, 3)), "Two actors may both peek around the same exposed edge")
 	assert(not game.clear_ray(Vector2i(3, 3), target), "Wall tiles cannot be virtual firing origins")
 	print("PASS: corner peeking visibility and shooting, reciprocal detection, cover retained, flat-wall blocking, stationary loot cannot peek, dual-edge peeking")
+	return true
+
+func test_automatic_combat_end(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	game.player = Vector2i(1, 1)
+	game.combat = true
+	game.ap = 2
+	game.enemies.append({"pos": Vector2i(2, 1), "hp": 0, "alerted": true})
+	game.enemies.append({"pos": Vector2i(22, 22), "hp": 60, "alerted": false})
+	var ticks_before = game.ticks
+	var hp_before = game.hp
+	game.finish_cleared_engagement()
+	game.refresh()
+	assert(not game.combat and game.end_button.disabled and game.ap == 2)
+	assert(game.ticks == ticks_before and game.hp == hp_before, "Automatic exit must not grant enemies a turn")
+	game.combat = true
+	game.enemies[1].alerted = true
+	game.finish_cleared_engagement()
+	assert(game.combat, "A surviving engaged enemy keeps combat active even out of sight")
+	game.enemies[1].hp = 0
+	game.enemies.append({"pos": Vector2i(2, 1), "hp": 60, "facing": Vector2i.LEFT})
+	game.finish_cleared_engagement()
+	assert(game.combat, "A guard that can see the player remains a threat")
+	game.enemies.clear()
+	game.enemies.append({"pos": Vector2i(2, 1), "hp": 1, "facing": Vector2i.LEFT})
+	game.selected = 0
+	game.ap = 1
+	game.ammo = 7
+	game.aiming = true
+	game.rng.seed = 42
+	game.shoot()
+	assert(game.enemies[0].hp <= 0 and not game.combat and game.ap == 0 and game.ammo == 6)
+	assert(game.aiming and game.ticks == ticks_before, "Final shot keeps Aim and adds no world tick")
+	assert(game.enemies[0].has("loot_kind") and not game.enemies[0].searched)
+	game.enter_combat()
+	assert(game.combat and game.ap == 4, "Fresh engagement starts with at least four AP")
+	game.combat = false
+	game.ap = 7
+	game.enter_combat()
+	assert(game.ap == 7, "Banked AP above four is retained")
+	print("PASS: automatic exit after final kill, distant unengaged patrols ignored, surviving threats retained, no extra enemy turn/tick/AP grant, body loot and Aim preserved, fresh engagement AP")
 	return true

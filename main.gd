@@ -352,7 +352,7 @@ func select_tile(target: Vector2i):
 			return
 		if visible(enemies[i]):
 			selected = i
-			combat = true
+			enter_combat()
 			message = "Target acquired. Fire to engage, or reposition behind cover."
 			refresh()
 			return
@@ -431,7 +431,7 @@ func world_tick():
 			spot_player(e)
 			spotted = true
 	if spotted:
-		combat = true
+		enter_combat()
 		message = "Enemy patrol spotted you. Combat begins."
 
 func choose_shot(mode: int):
@@ -475,6 +475,7 @@ func shoot():
 		enemy.searched = false
 		selected = -1
 		message += " Hostile down."
+		finish_cleared_engagement()
 	refresh()
 
 func take_damage(amount: int):
@@ -535,6 +536,8 @@ func enemy_turn():
 	elif not enemies.any(func(e): return enemy_can_see_player(e)):
 		combat = false
 		selected = -1
+		for e in enemies:
+			e.alerted = false
 		message = "Contact broken. Exploration resumes; patrols advance when you move."
 	refresh()
 
@@ -767,3 +770,20 @@ func corner_cover_at(p: Vector2i, attacker: Vector2i) -> bool:
 					if clear_ray(p + side, target):
 						return true
 	return false
+
+func enter_combat():
+	if not combat:
+		ap = maxi(ap, AP_PER_TURN)
+	combat = true
+
+func finish_cleared_engagement():
+	if not combat or finished:
+		return
+	for e in enemies:
+		if e.hp > 0 and (e.get("alerted", false) or enemy_can_see_player(e)):
+			return
+	combat = false
+	selected = -1
+	for e in enemies:
+		e.alerted = false
+	message += " Engagement cleared. Exploration resumes."
