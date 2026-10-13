@@ -44,8 +44,8 @@ func run():
 	assert(game.ap == 4)
 	game.ap = 2
 	assert(game.hit_chance(Vector2i(2, 1), Vector2i(4, 1)) > game.hit_chance(Vector2i(1, 1), Vector2i(7, 1)))
-	assert(not game.line_of_sight(Vector2i(2, 3), Vector2i(5, 3)))
-	assert(not game.cover_at(Vector2i(2, 3), Vector2i(5, 3)), "Full walls block shots rather than apply low cover")
+	assert(not game.line_of_sight(Vector2i(13, 4), Vector2i(15, 4)))
+	assert(not game.cover_at(Vector2i(13, 4), Vector2i(15, 4)), "Full walls block shots rather than apply low cover")
 	game.selected = 0
 	game.enemies[0].pos = Vector2i(5, 1)
 	game.shoot()
@@ -80,6 +80,7 @@ func run():
 		assert(game.distance(game.player, game.exfil) >= 8)
 		game.enemies.clear()
 		assert(not game.path_to(game.exfil).is_empty(), "Extraction must be connected to insertion")
+	assert(test_corner_peeking(game), "Peeking checks must complete")
 	assert(test_full_wall_corners(game), "Corner-cover checks must complete")
 	assert(test_combat_options(game), "Expanded combat tests must complete")
 	assert(test_objective_visibility(game), "Objective visibility checks must complete")
@@ -226,7 +227,7 @@ func test_health_and_cover(game) -> bool:
 	game.enemy_turn()
 	assert(game.hp == 76, "Enemy can fire twice over its own cover without an aim penalty")
 	assert(not game.walkable(Vector2i(3, 3)) and game.blocks_sight(Vector2i(3, 3)))
-	assert(not game.line_of_sight(Vector2i(2, 3), Vector2i(5, 3)), "Full walls still block visibility")
+	assert(not game.line_of_sight(Vector2i(13, 4), Vector2i(15, 4)), "Full walls still block visibility")
 	print("PASS: crate healing and health cap, no extra heal action, low-cover movement/LOS, automatic directional cover, flanking, reciprocal shots, own-cover accuracy, cover HUD")
 	return true
 
@@ -284,8 +285,8 @@ func test_objective_facing_loot(game) -> bool:
 	game.player = Vector2i(3, 10)
 	guard = {"pos": Vector2i(3, 8), "hp": 60, "facing": Vector2i.DOWN}
 	assert(game.enemy_can_see_player(guard), "Forward sight passes over low cover")
-	game.player = Vector2i(5, 3)
-	guard = {"pos": Vector2i(2, 3), "hp": 60, "facing": Vector2i.RIGHT}
+	game.player = Vector2i(13, 4)
+	guard = {"pos": Vector2i(15, 4), "hp": 60, "facing": Vector2i.LEFT}
 	assert(not game.enemy_can_see_player(guard), "Full walls still block facing-based detection")
 	print("PASS: distant randomized objective, locked extraction, objective pickup, four varied crates, directional sight, player visibility, patrol facing, low/full cover detection")
 	return true
@@ -365,8 +366,8 @@ func test_map_and_bodies(game) -> bool:
 func test_objective_visibility(game) -> bool:
 	game.new_raid()
 	game.enemies.clear()
-	game.player = Vector2i(13, 5)
-	game.objective = Vector2i(15, 5)
+	game.player = Vector2i(13, 4)
+	game.objective = Vector2i(15, 4)
 	game.refresh()
 	assert(not game.objective_visible(), "Building wall must conceal nearby objective")
 	assert(not game.player_can_see(game.objective), "Loot behind a building wall must be hidden")
@@ -520,8 +521,8 @@ func test_full_wall_corners(game) -> bool:
 	assert(game.hit_chance(defender, attacker) == 63, "Peeking around own corner does not penalize outgoing shots")
 	assert(not game.cover_at(defender, Vector2i(1, 5)), "Opposite side flanks corner cover")
 	assert(not game.cover_at(defender, Vector2i(2, 5)), "Shots along exposed side do not receive wall protection")
-	assert(not game.line_of_sight(defender, Vector2i(5, 3)))
-	assert(not game.cover_at(defender, Vector2i(5, 3)), "Corner cover never allows firing through solid walls")
+	assert(not game.line_of_sight(Vector2i(13, 4), Vector2i(15, 4)))
+	assert(not game.cover_at(Vector2i(13, 4), Vector2i(15, 4)), "Flat walls still block shots")
 	assert(not game.adjacent_cover(Vector2i(2, 4)), "Diagonal-only wall proximity does not grant cover")
 	assert(game.cover_at(Vector2i(4, 1), Vector2i(6, 3)), "Corners work on horizontal wall faces too")
 	game.player = attacker
@@ -536,4 +537,31 @@ func test_full_wall_corners(game) -> bool:
 	game.refresh()
 	assert("63%" in game.intel.text and "COVER" in game.intel.text, "Player gets corner cover and keeps outgoing accuracy")
 	print("PASS: automatic full-wall corner cover, incoming penalty, unpenalized peeking, flanking, blocked walls, cardinal adjacency, horizontal corners, player/enemy preview")
+	return true
+
+func test_corner_peeking(game) -> bool:
+	game.new_raid()
+	game.enemies.clear()
+	var edge = Vector2i(2, 2)
+	var target = Vector2i(5, 1)
+	assert(not game.clear_ray(edge, target), "Unit-center ray is obstructed")
+	assert(game.line_of_sight(edge, target) and game.line_of_sight(target, edge), "Peeking exposes a reciprocal firing line")
+	assert(game.cover_at(edge, target), "Peeking retains defensive cover")
+	game.player = edge
+	assert(game.player_can_see(target), "Viewer can see around its own corner")
+	game.enemies.append({"pos": target, "hp": 1000, "facing": Vector2i.LEFT})
+	game.combat = true
+	game.selected = 0
+	game.ap = 4
+	game.shoot()
+	assert(game.ammo == 6 and game.ap == 3, "Player can commit a shot around a corner")
+	assert(game.enemy_can_see_player(game.enemies[0]), "An exposed peeking player can be detected and targeted")
+	game.player = Vector2i(13, 4)
+	assert(not game.line_of_sight(game.player, Vector2i(15, 4)), "Flat wall cannot be bypassed")
+	assert(game.peek_positions(Vector2i(13, 4)).size() == 1)
+	game.player = target
+	assert(not game.player_can_see(edge), "Loot cannot peek from the hidden endpoint")
+	assert(game.line_of_sight(Vector2i(2, 3), Vector2i(5, 3)), "Two actors may both peek around the same exposed edge")
+	assert(not game.clear_ray(Vector2i(3, 3), target), "Wall tiles cannot be virtual firing origins")
+	print("PASS: corner peeking visibility and shooting, reciprocal detection, cover retained, flat-wall blocking, stationary loot cannot peek, dual-edge peeking")
 	return true

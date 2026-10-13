@@ -230,7 +230,9 @@ func new_raid():
 func distance(a: Vector2i, b: Vector2i) -> int:
 	return absi(a.x - b.x) + absi(a.y - b.y)
 
-func line_of_sight(a: Vector2i, b: Vector2i) -> bool:
+func clear_ray(a: Vector2i, b: Vector2i) -> bool:
+	if blocks_sight(a) or blocks_sight(b):
+		return false
 	var steps = maxi(absi(b.x - a.x), absi(b.y - a.y))
 	for i in range(1, steps):
 		var p = Vector2(a).lerp(Vector2(b), float(i) / steps)
@@ -238,8 +240,38 @@ func line_of_sight(a: Vector2i, b: Vector2i) -> bool:
 			return false
 	return true
 
+func peek_positions(p: Vector2i) -> Array[Vector2i]:
+	var positions: Array[Vector2i] = [p]
+	if not walkable(p):
+		return positions
+	for direction in DIRS:
+		if tile_at(p + direction) != "#":
+			continue
+		var tangent = Vector2i(-direction.y, direction.x)
+		for side in [tangent, -tangent]:
+			if walkable(p + side) and walkable(p + direction + side) and not positions.has(p + side):
+				positions.append(p + side)
+	return positions
+
+func sight_with_peeking(a: Vector2i, b: Vector2i, target_peeks: bool) -> bool:
+	var targets: Array[Vector2i] = []
+	if target_peeks:
+		targets = peek_positions(b)
+	else:
+		targets.append(b)
+	for origin in peek_positions(a):
+		for target in targets:
+			if clear_ray(origin, target):
+				return true
+	return false
+
+func line_of_sight(a: Vector2i, b: Vector2i) -> bool:
+	# Actors may lean at either end, so exposed peeking positions can be fired on.
+	return sight_with_peeking(a, b, true)
+
 func player_can_see(p: Vector2i) -> bool:
-	return distance(player, p) <= 6 and line_of_sight(player, p)
+	# Stationary loot/objectives cannot lean out from behind their own walls.
+	return distance(player, p) <= 6 and sight_with_peeking(player, p, false)
 
 func objective_visible() -> bool:
 	return not objective_collected and player_can_see(objective)
@@ -584,7 +616,7 @@ func draw_map(canvas: Control):
 	for i in range(enemies.size()):
 		var e = enemies[i]
 		if e.hp <= 0:
-			if distance(player, e.pos) <= 6 and line_of_sight(player, e.pos):
+			if player_can_see(e.pos):
 				var body_center = map_point(e.pos) + Vector2(17, 17)
 				var body_color = Color("778078") if e.get("searched", false) else Color("e0c090")
 				canvas.draw_line(body_center - Vector2(8, 5), body_center + Vector2(8, 5), body_color, 4)
@@ -730,6 +762,8 @@ func corner_cover_at(p: Vector2i, attacker: Vector2i) -> bool:
 			continue
 		var tangent = Vector2i(-direction.y, direction.x)
 		for side in [tangent, -tangent]:
-			if walkable(p + side) and walkable(p + direction + side) and delta.x * side.x + delta.y * side.y > 0:
-				return true
+			if walkable(p + side) and walkable(p + direction + side) and delta.x * side.x + delta.y * side.y >= 0:
+				for target in peek_positions(attacker):
+					if clear_ray(p + side, target):
+						return true
 	return false
